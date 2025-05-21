@@ -11,7 +11,7 @@ body {
 
 #terminal {
     width: 100%;
-    max-width: 95ch; /* Wider for better code snippet viewing */
+    max-width: 120ch; /* Wider for better code snippet viewing */
     height: 100vh;
     margin: 0 auto;
     padding: 10px;
