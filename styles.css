@@ -1,0 +1,351 @@
+body {
+    background-color: #1e1e1e;
+    color: #d4d4d4;
+    font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, Courier, monospace;
+    font-size: 14px;
+    line-height: 1.4;
+    margin: 0;
+    padding: 0;
+    overflow: hidden;
+}
+
+#terminal {
+    width: 100%;
+    max-width: 95ch; /* Wider for better code snippet viewing */
+    height: 100vh;
+    margin: 0 auto;
+    padding: 10px;
+    box-sizing: border-box;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden; 
+}
+
+#output-container {
+    flex-grow: 1; 
+    overflow-y: auto; 
+    padding-bottom: 5px; 
+    word-wrap: break-word; 
+    white-space: pre-wrap; 
+}
+
+.input-line { /* Class for the div holding the prompt and actual input element */
+    display: flex;
+    align-items: center;
+    flex-shrink: 0; 
+}
+
+.prompt {
+    margin-right: 8px;
+    color: #569cd6; 
+    white-space: nowrap; 
+}
+
+/* Targets the <input type="text"> inside a .input-line div (which is inside output-container) */
+#output-container .input-line input[type="text"] {
+    background-color: transparent;
+    border: none;
+    color: #d4d4d4;
+    font-family: inherit;
+    font-size: inherit;
+    flex-grow: 1;
+    outline: none;
+    padding: 0; 
+    caret-color: #d4d4d4; 
+}
+
+/* Scrollbar Hiding */
+#output-container,
+#modal-content {
+    scrollbar-width: none; /* Firefox */
+    -ms-overflow-style: none;  /* IE and Edge */
+}
+#output-container::-webkit-scrollbar,
+#modal-content::-webkit-scrollbar {
+    display: none; /* WebKit */
+    width: 0; 
+    height: 0;
+}
+
+.command-output-item { 
+    margin-bottom: 2px; 
+    line-height: 1.4;
+    display: block; 
+}
+
+.error { color: #f44747; }
+.success { color: #4caf50; }
+
+.markdown-content h1, .markdown-content h2, .markdown-content h3 {
+    color: #569cd6; margin-top: 0.5em; margin-bottom: 0.3em;
+}
+.markdown-content p { margin-bottom: 0.5em; }
+.markdown-content ul, .markdown-content ol { margin-left: 20px; margin-bottom: 0.5em; }
+.markdown-content code:not(pre code) { 
+    background-color: #333; padding: 0.1em 0.3em; border-radius: 3px; font-size: 0.9em;
+}
+.markdown-content pre { 
+    background-color: #252526; 
+    padding: 10px; 
+    border-radius: 4px; 
+    margin-bottom: 1em;
+    white-space: pre-wrap;   /* Preserve whitespace formatting AND wrap lines */
+    overflow-wrap: break-word; /* Break long words/strings if they would overflow */
+    overflow-x: hidden;      /* Explicitly hide horizontal scrollbar */
+}
+.markdown-content pre code.hljs { padding: 0; background: none; }
+
+.man-page { font-family: inherit; white-space: pre-wrap; }
+.man-page strong { font-weight: bold; color: #ce9178; }
+
+/* Modal styles remain the same as the last version */
+.modal-view {
+    position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+    background-color: rgba(0, 0, 0, 0.75); 
+    z-index: 1000; display: flex; flex-direction: column;
+    align-items: center; justify-content: center; 
+    padding: 20px; box-sizing: border-box;
+}
+
+.modal-content-wrapper { 
+    background-color: #1e1e1e; 
+    border: 1px solid #444;
+    max-width: 85ch; 
+    width: 90%;      
+    max-height: 90vh; 
+    display: flex; flex-direction: column;
+    border-radius: 4px;
+    box-shadow: 0 5px 20px rgba(0,0,0,0.6);
+    overflow: hidden; 
+}
+
+#modal-nano-header { 
+    background-color: #333; color: #fff; padding: 5px 15px;
+    font-weight: bold; text-align: center; border-bottom: 1px solid #444;
+    flex-shrink: 0;
+}
+
+#modal-content { 
+    flex-grow: 1; 
+    overflow-y: auto; 
+    font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, Courier, monospace;
+    font-size: 14px; line-height: 1.5; 
+    white-space: pre-wrap; 
+    word-wrap: break-word; 
+    color: #d4d4d4; padding: 15px 20px; 
+    box-sizing: border-box;
+}
+
+.modal-footer {
+    flex-shrink: 0; padding: 8px 15px; text-align: center;
+    color: #aaa; font-size: 0.9em; border-top: 1px solid #444;
+}
+
+.vi-mode.modal-content-wrapper { background-color: #000000; }
+.vi-mode .modal-content { color: #c0c0c0; }
+.vi-mode .line-number { color: #6a9955; margin-right: 10px; display: inline-block; user-select: none; }
+
+.nano-mode.modal-content-wrapper .modal-footer { background-color: #333; color: #fff; }
+
+/* SL Animation Div - ensures it can be cleared or overwritten */
+.sl-animation-frame {
+    white-space: pre; /* Crucial for ASCII art */
+    font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, Courier, monospace; /* Monospace for ASCII */
+    line-height: 0.8; /* Adjust for tighter ASCII art if needed */
+    margin-bottom: 5px;
+}
+
+/* Cowsay Output */
+.cowsay-output {
+    white-space: pre;
+    font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, Courier, monospace;
+    line-height: 1.2;
+    margin-bottom: 5px;
+}
+
+/* Code Copy Button Styling */
+.code-block-wrapper {
+    position: relative; /* Container for positioning the button */
+    margin-bottom: 1em; /* Similar to pre's original margin */
+}
+
+/* Target pre directly if it's the direct child for structure reasons */
+.markdown-content .code-block-wrapper > pre, 
+.modal-content .code-block-wrapper > pre {
+    margin-bottom: 0; /* Remove margin from pre if wrapper handles it */
+}
+
+
+.code-copy-button {
+    position: absolute;
+    top: 5px;
+    right: 5px;
+    padding: 3px 8px;
+    font-size: 0.8em;
+    color: #bbb;
+    background-color: #3a3a3a;
+    border: 1px solid #555;
+    border-radius: 3px;
+    cursor: pointer;
+    opacity: 0.7;
+    transition: opacity 0.2s ease-in-out, background-color 0.2s ease-in-out;
+}
+
+.code-block-wrapper:hover .code-copy-button {
+    opacity: 1;
+}
+
+.code-copy-button:hover {
+    background-color: #4a4a4a;
+    color: #fff;
+}
+
+.code-copy-button.copied {
+    background-color: #28a745; /* Green for success */
+    color: #fff;
+    opacity: 1;
+}
+
+/* Copy All button for vi/nano modals */
+.modal-copy-all-button {
+    padding: 3px 8px;
+    font-size: 0.85em;
+    margin-left: 10px; /* Space it from other footer text */
+    color: #bbb;
+    background-color: #3a3a3a;
+    border: 1px solid #555;
+    border-radius: 3px;
+    cursor: pointer;
+}
+.modal-copy-all-button:hover {
+    background-color: #4a4a4a;
+    color: #fff;
+}
+.modal-copy-all-button.copied {
+    background-color: #28a745;
+    color: #fff;
+}
+
+/* Ensure markdown pre tags are ready for relative positioning if needed */
+.markdown-content pre { 
+    /* position: relative; /* Only if .code-block-wrapper is not used */
+    /* ... other pre styles ... */
+    background-color: #252526; 
+    padding: 10px; 
+    padding-top: 30px; /* Add padding at top if button is inside pre */
+    border-radius: 4px; 
+    white-space: pre-wrap;   
+    overflow-wrap: break-word; 
+    overflow-x: hidden;      
+}
+
+/* Code Copy Button Styling */
+.code-block-wrapper {
+    position: relative;
+    margin-bottom: 1em; 
+}
+
+.markdown-content .code-block-wrapper > pre, 
+.modal-content .code-block-wrapper > pre {
+    margin-bottom: 0; 
+    padding-top: 35px; /* Ensure space for the button if it's absolutely positioned *over* the pre */
+}
+
+
+.code-copy-button {
+    position: absolute;
+    top: 8px; /* Adjust to be clear of pre content */
+    right: 8px;
+    padding: 4px 8px; /* Slightly larger */
+    font-size: 0.75em; /* Smaller font */
+    color: #ccc;
+    background-color: #4a4a4a; /* Darker default */
+    border: 1px solid #666;
+    border-radius: 4px;
+    cursor: pointer;
+    opacity: 0.6; /* Less obtrusive initially */
+    transition: opacity 0.2s ease-in-out, background-color 0.2s ease-in-out, color 0.2s ease-in-out;
+    z-index: 10; /* Ensure it's above code highlighting */
+}
+
+.code-block-wrapper:hover .code-copy-button {
+    opacity: 1;
+}
+
+.code-copy-button:hover {
+    background-color: #5a5a5a;
+    color: #fff;
+}
+
+.code-copy-button.copied {
+    background-color: #28a745; 
+    color: #fff;
+    opacity: 1;
+}
+
+.code-copy-button.error { /* New class for error state */
+    background-color: #dc3545; /* Red for error */
+    color: #fff;
+    opacity: 1;
+}
+
+
+/* Copy All button for vi/nano modals */
+.modal-copy-all-button {
+    padding: 4px 10px;
+    font-size: 0.8em;
+    margin-left: 10px; 
+    color: #ccc;
+    background-color: #4a4a4a;
+    border: 1px solid #666;
+    border-radius: 4px;
+    cursor: pointer;
+    transition: background-color 0.2s ease-in-out, color 0.2s ease-in-out;
+}
+.modal-copy-all-button:hover {
+    background-color: #5a5a5a;
+    color: #fff;
+}
+.modal-copy-all-button.copied,
+.modal-copy-all-button.error { /* Shared style for modal button feedback */
+    color: #fff;
+}
+.modal-copy-all-button.copied {
+    background-color: #28a745;
+}
+.modal-copy-all-button.error {
+    background-color: #dc3545;
+}
+
+/* Ensure pre tags have enough padding if button is absolutely positioned inside them.
+   The current approach is button inside wrapper, sibling to pre.
+   If button were inside pre: preBlock.style.position = 'relative'; */
+.markdown-content pre { 
+    background-color: #252526; 
+    padding: 10px; 
+    border-radius: 4px; 
+    margin-bottom: 1em;
+    white-space: pre-wrap;   
+    overflow-wrap: break-word; 
+    overflow-x: hidden;      
+    position: relative; /* Needed if copy button is absolute child of pre itself, but we use a wrapper */
+}
+
+div.markdown-content p a {
+    color: yellow!important;
+    text-decoration: underline;
+  }
+  
+div.markdown-content p a:hover {
+    color: gold!important;
+}
+  
+a {
+    color: yellow !important;
+    text-decoration: underline;
+  }
+  
+a:hover {
+    color: gold !important;
+}
+  
