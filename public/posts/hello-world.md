@@ -1,6 +1,6 @@
 # Hello World!
 
-This is my first post on this terminal-style blog. Welcome!
+This is my test post on this terminal-style blog. Welcome!
 
 ## Features
 * Markdown rendering via `marked.js`
