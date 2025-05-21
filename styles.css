@@ -2,7 +2,7 @@ body {
     background-color: #1e1e1e;
     color: #d4d4d4;
     font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, Courier, monospace;
-    font-size: 14px;
+    font-size: 16px;
     line-height: 1.4;
     margin: 0;
     padding: 0;
@@ -11,7 +11,7 @@ body {
 
 #terminal {
     width: 100%;
-    max-width: 120ch; /* Wider for better code snippet viewing */
+    max-width: 85vp; /* Wider for better code snippet viewing */
     height: 100vh;
     margin: 0 auto;
     padding: 10px;
