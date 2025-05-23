@@ -47,14 +47,21 @@ Object.defineProperty(navigator, 'clipboard', {
 });
 
 // Mock for fetch
-global.fetch = jest.fn(() =>
-  Promise.resolve({
+global.fetch = jest.fn((url) => {
+  // Default behavior:
+  let responseData = {}; // Default to object for single items or non-list endpoints
+  if (url && (url.endsWith('/repos') || url.includes('/contents/'))) {
+    // For endpoints typically returning lists (like list repos, list contents), default to an empty array.
+    responseData = [];
+  }
+  return Promise.resolve({
     ok: true,
-    json: () => Promise.resolve({}),
-    text: () => Promise.resolve(""),
-    headers: new Map(), // Add a basic headers mock
-  })
-);
+    json: () => Promise.resolve(responseData),
+    text: () => Promise.resolve(typeof responseData === 'string' ? responseData : JSON.stringify(responseData)),
+    headers: new Map(),
+    url: url // include the url in the mock response for easier debugging in fetchGitHubApi
+  });
+});
 
 // Mock for common DOM elements and their methods that app.js might use frequently
 // This helps avoid "null is not an object" if app.js runs some UI code at load.

@@ -62,9 +62,56 @@ async function initializeAppEnvironment() {
     // Levenshtein (already global via jest.setup.js or defined here)
     const levenshtein = global.levenshtein || function(s1, s2) { /* actual implementation */ };
 
-    // Fetch helpers (assuming they are globally mocked by jest.setup.js or available)
-    const fetchGitHubApi = global.fetchGitHubApi || global.fetch;
-    const fetchRawGitHubContent = global.fetchRawGitHubContent || global.fetch;
+    // Fetch helpers - copy their implementations from app.js here for the mock commands to use
+    // These will use the globally mocked `fetch` (from jest.setup.js or overridden in tests)
+    async function fetchGitHubApi(url) { // Copied from app.js
+        let response;
+        try {
+            response = await global.fetch(url); // Uses the Jest mock for fetch
+        } catch (networkError) {
+            console.error("Network error fetching from GitHub API (test mock):", networkError);
+            throw new Error(`Network request failed. Please check your internet connection.`);
+        }
+        if (!response.ok) {
+            const status = response.status;
+            const statusText = response.statusText;
+            const requestedUrl = response.url;
+            if (status === 403 && response.headers.get('X-RateLimit-Remaining') === '0') {
+                const resetTimeEpoch = parseInt(response.headers.get('X-RateLimit-Reset')) * 1000;
+                const resetTime = new Date(resetTimeEpoch).toLocaleTimeString();
+                throw new Error(`GitHub API rate limit exceeded. Try again after ${resetTime}.`);
+            } else if (status === 404) {
+                const pathPart = requestedUrl.includes('/repos/') ? requestedUrl.split('/repos/')[1] : requestedUrl;
+                throw new Error(`Error: Repository or path not found: ${pathPart}`);
+            } else {
+                throw new Error(`GitHub API Error: ${status} ${statusText}.`);
+            }
+        }
+        return await response.json();
+    }
+    global.fetchGitHubApi = fetchGitHubApi; // Make it globally available for tests if they call it directly
+
+    async function fetchRawGitHubContent(owner, repoName, path, branch = 'main') { // Copied from app.js
+        const url = `https://raw.githubusercontent.com/${owner}/${repoName}/${branch}/${path}`;
+        let response;
+        try {
+            response = await global.fetch(url); // Uses the Jest mock for fetch
+        } catch (networkError) {
+            console.error("Network error fetching raw GitHub content (test mock):", networkError);
+            throw new Error(`Network request failed. Please check your internet connection.`);
+        }
+        if (!response.ok) {
+            const status = response.status;
+            const statusText = response.statusText;
+            if (status === 404) {
+                throw new Error(`Error: File not found: ${owner}/${repoName}/${path}`);
+            } else {
+                throw new Error(`Error fetching file: ${status} ${statusText}.`);
+            }
+        }
+        return await response.text();
+    }
+    global.fetchRawGitHubContent = fetchRawGitHubContent; // Make it globally available for tests
 
 
     // Mock functions from app.js that are part of 'commands'
@@ -131,8 +178,18 @@ async function initializeAppEnvironment() {
                 mockShowLoadingSuggestions(); // Simulate call
                 try {
                     let repos = await fetchGitHubApi(`https://api.github.com/users/${owner}/repos`); // Uses mocked fetch
-                    if (!repos || repos.length === 0) { mockDisplayOutput(`  No public repositories found for ${owner}.`); }
-                    else {
+                    
+                    if (!Array.isArray(repos)) {
+                        // This case handles when fetchGitHubApi returns something not an array (e.g. an error object not thrown)
+                        // OR if the underlying fetch mock in a specific test returns a non-array.
+                        // The actual fetchGitHubApi is designed to throw an error or return a JSON parsed object (hopefully an array for this URL).
+                        console.error('Mock lsrepos: fetchGitHubApi did not return an array. Response:', repos);
+                        // If fetchGitHubApi threw an error, this part is skipped, and catch block handles it.
+                        // This 'if' is more for unexpected returns that are not errors.
+                        mockDisplayOutput("Error: Could not retrieve a valid list of repositories.", "error");
+                    } else if (repos.length === 0) { 
+                        mockDisplayOutput(`  No public repositories found for ${owner}.`); 
+                    } else {
                         if (sortByTime) repos.sort((a, b) => new Date(b.pushed_at).getTime() - new Date(a.pushed_at).getTime());
                         else repos.sort((a, b) => a.name.localeCompare(b.name));
                         
@@ -145,47 +202,95 @@ async function initializeAppEnvironment() {
                              repos.forEach(repo => mockDisplayOutput(`  ${formatDateForLs(repo.pushed_at)} ${(repo.language || "N/A").padEnd(maxLangLen, ' ')} ★${String(repo.stargazers_count).padStart(maxStarsLen, ' ')}   ${repo.name}/`));
                         } else repos.forEach(repo => mockDisplayOutput(`  ${repo.name}/`));
                     }
-                } catch (error) { mockDisplayOutput(`${error.message}`, 'error'); } 
+                } catch (error) { 
+                    // This catch block is for errors thrown by fetchGitHubApi
+                    mockDisplayOutput(`${error.message}`, 'error'); 
+                } 
                 finally { mockHideLoadingSuggestions(); } // Simulate call
-            } else {
-                const fullPathArg = args[0];
-                const pathParts = fullPathArg.split('/');
+            } else { // Listing contents of a specific repository or a path within it (MOCK LSCMD)
+                let fullPathArg = args[0];
+                let userProvidedPathForMessage = fullPathArg; // Not strictly used in mock, but for consistency
+
+                let normalizedPath = fullPathArg;
+                if (normalizedPath.toLowerCase().startsWith('repo/')) {
+                    normalizedPath = normalizedPath.substring('repo/'.length);
+                } else if (normalizedPath.toLowerCase().startsWith('repos/')) {
+                    normalizedPath = normalizedPath.substring('repos/'.length);
+                }
+                // Now normalizedPath is "my-repo/src" or "my-repo"
+
+                const pathParts = normalizedPath.split('/');
                 const repoName = pathParts[0];
                 const pathWithinRepo = pathParts.slice(1).join('/');
+                
                 const displayPath = `${owner}/${repoName}${pathWithinRepo ? '/' + pathWithinRepo : ''}`;
-                mockDisplayOutput(`Contents of ${displayPath}:`);
+                // Header is displayed only if it's a directory and successful fetch
+                
                 mockShowLoadingSuggestions();
                 try {
-                    const contents = await fetchGitHubApi(`https://api.github.com/repos/${owner}/${repoName}/contents/${pathWithinRepo}`);
-                    if (!Array.isArray(contents)) {
-                         if (contents && contents.type === 'file') mockDisplayOutput(`Error: ${displayPath} is a file, not a directory.`, 'error');
-                         else mockDisplayOutput(`Error: Path ${displayPath} not found or not a directory.`, 'error');
-                    } else if (contents.length === 0) mockDisplayOutput(`  Directory ${displayPath} is empty.`);
-                    else {
-                        contents.sort((a,b) => { /* sort logic */ return a.name.localeCompare(b.name);}); // Simplified sort for test stub
-                        contents.forEach(item => mockDisplayOutput(`  ${item.name}${item.type === 'dir' ? '/' : ''}`));
+                    const contents = await fetchGitHubApi(`https://api.github.com/repos/${owner}/${repoName}/contents/${pathWithinRepo}`); // Uses mocked fetch
+                    
+                    if (contents && typeof contents === 'object' && !Array.isArray(contents) && contents.type === 'file') {
+                         mockDisplayOutput(`ls: cannot access 'repo/${normalizedPath}': It is a file. Use 'cat' or 'less' to view its content.`, 'error');
+                    } else if (Array.isArray(contents)) {
+                        mockDisplayOutput(`Contents of ${displayPath}:`);
+                        if (contents.length === 0) {
+                            mockDisplayOutput(`  Directory ${displayPath} is empty.`);
+                        } else {
+                            // Simplified sort for test stub, actual sort is more complex
+                            contents.sort((a,b) => a.name.localeCompare(b.name)); 
+                            contents.forEach(item => mockDisplayOutput(`  ${item.name}${item.type === 'dir' ? '/' : ''}`));
+                        }
+                    } else {
+                        // This else implies contents is not an array and not a file object,
+                        // or fetchGitHubApi itself threw an error (which is caught below).
+                        // If fetchGitHubApi resolved with non-array/non-file, and didn't throw.
+                        mockDisplayOutput(`Error: Could not list contents of ${displayPath}. Path may be invalid or an unexpected error occurred.`, 'error');
                     }
-                } catch (error) { mockDisplayOutput(`${error.message}`, 'error'); }
-                finally { mockHideLoadingSuggestions(); }
+                } catch (error) { 
+                    mockDisplayOutput(`${error.message}`, 'error'); 
+                } finally { 
+                    mockHideLoadingSuggestions(); 
+                }
             }
         },
         // --- ls ---
-        ls: async (args) => {
+        ls: async (args) => { // This is the MOCK ls in app.test.js
             if (args.length === 0) {
                 mockDisplayOutput("posts/");
                 mockDisplayOutput("repos/");
-            } else if (args.length === 1 && args[0].toLowerCase() === 'posts') {
-                await commands.lsPosts([]); 
-            } else if (args.length > 0 && args[0].toLowerCase() === 'repo') { // Covers 'repo' and 'repo <path>'
-                 await commands.lsrepos(args.slice(1)); // Pass arguments like <repo-name/path> or flags
-            } else if (args.length > 0 && args[0].toLowerCase() === 'repos') { // Covers 'repos <path>'
-                 await commands.lsrepos(args.slice(1));
+                return;
             }
-             else { // For 'ls posts -l', etc.
-                const commandArg = args[0].toLowerCase();
-                if (commandArg === 'posts') await commands.lsPosts(args);
-                // else if (commandArg === 'repo' || commandArg === 'repos') await commands.lsrepos(args); // This needs specific handling for flags too
-                else mockDisplayOutput(`Usage: ls [posts|repo]`, 'error');
+    
+            let firstArgNormalized = args[0].toLowerCase();
+            if (firstArgNormalized === 'posts/') {
+                firstArgNormalized = 'posts';
+            } else if (firstArgNormalized === 'repo/') {
+                firstArgNormalized = 'repo';
+            } else if (firstArgNormalized === 'repos/') {
+                firstArgNormalized = 'repo';
+            }
+    
+            if (firstArgNormalized === 'posts') {
+                // The mock lsPosts should be robust enough to handle original args
+                // or we simplify its expectation here if it only receives flags.
+                // For `ls posts/ -l`, args is `['posts/', '-l']`.
+                // The actual lsPosts uses args.includes, so it's fine.
+                await global.commands.lsPosts(args); 
+            } else if (firstArgNormalized === 'repo' || firstArgNormalized === 'repos') {
+                await global.commands.lsrepos(args.slice(1));
+            } else if (firstArgNormalized.startsWith('repo/') || firstArgNormalized.startsWith('repos/')) {
+                // This case is when firstArgNormalized is like 'repo/somepath'
+                // (because it didn't match 'repo/' exactly due to the path part).
+                // The actual lsrepos expects the full path in args[0]
+                await global.commands.lsrepos(args); 
+            } else {
+                if (args.every(arg => arg.startsWith('-'))) {
+                    mockDisplayOutput("posts/");
+                    mockDisplayOutput("repos/");
+                    return;
+               }
+                mockDisplayOutput(`Usage: ls [posts|repo[/path]] [-lt] or ls posts [-lt]`, 'error');
             }
         },
         // ... other commands can be stubbed if needed for processCommand tests
@@ -581,6 +686,37 @@ describe('Terminal App Core Features', () => {
       await global.processCommand(`cat repos/${repoName}/${fileName}`);
       expect(mockDisplayOutput).toHaveBeenCalledWith(`parsed:${fileContent}`, 'rawhtml');
     });
+
+    test('cat posts/existing-post.md should display local post content', async () => {
+      const postFileName = 'existing-post.md';
+      const postContent = '# Local Post Title\nContent here.';
+      mockPostsManifest.push({ name: postFileName, lastModified: '2024-01-01T00:00:00Z', size: 100 });
+      
+      // Mock the fetch for the local post file
+      // This fetch is called by commands.cat (the actual one, or our mock of it)
+      global.fetch.mockImplementation(async (url) => {
+        if (url === `public/posts/${postFileName}`) {
+          return {
+            ok: true,
+            text: () => Promise.resolve(postContent),
+          };
+        }
+        // Fallback for any other fetch calls if necessary, though this test should only trigger one.
+        return { ok: false, status: 404, text: () => Promise.resolve("Not Found")};
+      });
+
+      // Call processCommand, which will route to commands.cat
+      // The commands.cat (mocked in initializeAppEnvironment or actual if app.js is fully loaded)
+      // should strip "posts/" before fetching.
+      await global.processCommand(`cat posts/${postFileName}`);
+      
+      // marked.parse is mocked in jest.setup.js to return "parsed:"+input
+      expect(mockDisplayOutput).toHaveBeenCalledWith(`parsed:${postContent}`, 'rawhtml');
+
+      // Restore general fetch mock if it was changed or make sure it's reset in beforeEach
+      // For this test, mockImplementation is specific. If global.fetch is reset in beforeEach, this is fine.
+    });
+
   });
 
   describe('Tab Autocompletion', () => {

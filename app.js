@@ -372,12 +372,15 @@ document.addEventListener('DOMContentLoaded', () => {
             // Scenario 2: Completing arguments for a command
             else if (parts.length >= 1 && commandName) { // Command name is present or fully typed
                 const argIndex = currentInputValue.endsWith(" ") ? parts.length : parts.length - 1;
+                const argIndex = currentInputValue.endsWith(" ") ? parts.length : parts.length - 1;
                 const currentArgText = currentInputValue.endsWith(" ") ? "" : parts[parts.length - 1];
 
-                if (commandName === 'ls' || ['cat', 'less', 'vi', 'nano'].includes(commandName)) {
-                    if (argIndex === 1) { // Completing the first argument (path)
-                        if (currentArgText.startsWith("posts/")) {
-                            const filePrefix = currentArgText.substring("posts/".length);
+                // Ensure commandName is valid before proceeding with argument completion
+                if (commandName && commands[commandName]) {
+                    if (commandName === 'ls' || ['cat', 'less', 'vi', 'nano'].includes(commandName)) {
+                        if (argIndex === 1) { // Completing the first argument (path)
+                            if (currentArgText.startsWith("posts/")) {
+                                const filePrefix = currentArgText.substring("posts/".length);
                             suggestions = postsManifest
                                 .filter(post => post.name.toLowerCase().startsWith(filePrefix.toLowerCase()))
                                 .map(p => "posts/" + p.name);
@@ -413,15 +416,25 @@ document.addEventListener('DOMContentLoaded', () => {
                                     showLoadingSuggestions(outputContainer, currentInputLineDiv);
                                     try {
                                         const contents = await fetchGitHubApi(`https://api.github.com/repos/robertovacirca/${repoName}/contents/${pathPrefixSegments.join('/')}`);
-                                        repoContentsCache[cacheKey] = contents;
+                                        if (Array.isArray(contents)) {
+                                            repoContentsCache[cacheKey] = contents;
+                                        } else {
+                                            // If the API returns a single file object for a path that was expected to be a dir,
+                                            // or any other non-array response that isn't an error.
+                                            console.warn(`Tab completion: Expected array for ${cacheKey}, received:`, contents);
+                                            repoContentsCache[cacheKey] = []; // Cache empty array
+                                        }
                                     } catch (err) {
-                                        displayOutput(`Error fetching contents for ${repoName}/${pathPrefixSegments.join('/')}: ${err.message}`, 'error');
-                                        repoContentsCache[cacheKey] = []; // Avoid retrying
+                                        displayOutput(`Error fetching suggestions for ${repoName}/${pathPrefixSegments.join('/')}: ${err.message}`, 'error');
+                                        repoContentsCache[cacheKey] = []; // Cache empty array on error
                                     } finally {
                                         hideLoadingSuggestions();
                                     }
                                 }
-                                suggestions = (repoContentsCache[cacheKey] || [])
+                                // Ensure that we only try to filter if repoContentsCache[cacheKey] is actually an array.
+                                // The `|| []` handles cases where cacheKey might not exist yet if fetch failed early or is in progress.
+                                const cachedContent = repoContentsCache[cacheKey];
+                                suggestions = (Array.isArray(cachedContent) ? cachedContent : [])
                                     .filter(item => item.name.startsWith(itemToComplete))
                                     .map(item => `repo/${repoName}/${pathPrefixSegments.join('/') ? pathPrefixSegments.join('/') + '/' : ''}${item.name}${item.type === 'dir' ? '/' : ''}`);
                             }
@@ -430,15 +443,17 @@ document.addEventListener('DOMContentLoaded', () => {
                         }
                     }
                 } else if (commandName === 'man') {
-                    if (argIndex === 1) {
+                    if (argIndex === 1) { // Completing the command name argument for 'man'
                          suggestions = Object.keys(commandHelp).filter(cmd => cmd.startsWith(currentArgText) && cmd !== '?');
                     }
                 }
+                // Add other command-specific argument completion logic here if needed
             }
 
-            // Ensure suggestions are unique if multiple sources could add them
-            if (suggestions.length > 0) suggestions = [...new Set(suggestions)];
-
+            // Ensure suggestions are unique (e.g. if multiple logic paths could add the same suggestion)
+            if (suggestions.length > 0) {
+                suggestions = [...new Set(suggestions)];
+            }
 
             if (suggestions.length === 1) {
                 const suggestion = suggestions[0];
@@ -469,13 +484,12 @@ async function processCommand(commandText) {
     if (!command && commandText === "") {
         // Empty enter press
     } else if (command) {
-        // --- NEW LOGIC START ---
-        // Handles commands like 'cat repo/my-repo/file.md'
+        // Special routing for cat, less, vi, nano for repo paths
         if (['cat', 'less', 'vi', 'nano'].includes(command.toLowerCase()) && 
             args[0] && 
             (args[0].toLowerCase().startsWith('repo/') || args[0].toLowerCase().startsWith('repos/'))) {
             
-            const fullPathArg = args[0]; // e.g., "repo/my-repo/README.md" or "repos/my-repo/README.md"
+            const fullPathArg = args[0]; 
             let pathWithoutPrefix = '';
             
             if (fullPathArg.toLowerCase().startsWith('repo/')) {
@@ -484,27 +498,39 @@ async function processCommand(commandText) {
                 pathWithoutPrefix = fullPathArg.substring('repos/'.length);
             }
 
-            const pathParts = pathWithoutPrefix.split('/'); // e.g., ["my-repo", "README.md"]
+            const pathParts = pathWithoutPrefix.split('/');
             
-            if (pathParts.length >= 1) { // Must have at least a repo name
+            // Ensure repoName is not empty (e.g. from "cat repo/")
+            if (pathParts.length >= 1 && pathParts[0]) { 
                 const repoName = pathParts[0];
-                const fileOrDirPath = pathParts.slice(1).join('/'); // Can be empty if it's just a repo name (though cat/less etc. need a file)
+                const fileOrDirPath = pathParts.slice(1).join('/'); 
 
-                if (!fileOrDirPath) { // Check if fileOrDirPath is empty, meaning only repo name was passed
-                    displayOutput(`${command}: '${fullPathArg}' is a directory or invalid file path.`, 'error');
-                    // We don't return yet, let the actual command logic try if it wants, or fail.
-                    // Or, we could return here:
-                    // createNewInputLine(); // if we were to return early
-                    // return; 
+                if (!fileOrDirPath) { 
+                    displayOutput(`${command}: '${fullPathArg}' is a directory. Please specify a file path.`, 'error');
+                    // No further processing for this command if only a directory is given to cat/less etc.
+                    // createNewInputLine(); // Not needed here as processCommand finishes and calls it
+                    return; 
                 }
-                 // Call the appropriate command (e.g., catrepos, lessrepos)
-                 // The target functions (catrepos etc.) expect (repoName, filePath)
-                await commands[command.toLowerCase() + 'repos'](repoName, fileOrDirPath);
-                return; // Exit after handling
+                
+                const targetReposCommandName = command.toLowerCase() + 'repos';
+                if (commands[targetReposCommandName]) {
+                    await commands[targetReposCommandName](repoName, fileOrDirPath);
+                } else {
+                    // This case should ideally not be hit if all ...repos commands are defined
+                    console.error(`Internal error: Command ${targetReposCommandName} not found, but routing logic directed to it.`);
+                    displayOutput(`Error: Command ${command} does not support repository operations for ${targetReposCommandName}.`, 'error');
+                }
+                return; // Exit after handling the repo-specific command
+            } else { 
+                 // Case where pathWithoutPrefix was empty or only contained slashes, making repoName empty.
+                 // e.g., user typed "cat repo/" or "cat repos//"
+                 displayOutput(`${command}: Invalid repository path specified: '${fullPathArg}'`, 'error');
+                 // createNewInputLine(); // Not needed here
+                 return;
             }
         }
-        // --- NEW LOGIC END ---
 
+        // Default command handling (includes local posts for cat, etc.)
         const cmdFunc = commands[command.toLowerCase()];
         if (cmdFunc) {
             try {
@@ -515,6 +541,37 @@ async function processCommand(commandText) {
             }
         } else {
             displayOutput(`bash: command not found: ${command}`, 'error');
+            const commandNames = Object.keys(commands);
+            const threshold = 2; 
+            let suggestions = [];
+
+            for (const validCommand of commandNames) {
+                // Do not suggest '?' for commands longer than 1 char, unless the command itself is '?'
+                if (validCommand === "?" && command !== "?" && command.length > 1) continue; 
+                
+                const distance = levenshtein(command, validCommand);
+                if (distance <= threshold) {
+                    suggestions.push({ command: validCommand, distance: distance });
+                }
+            }
+
+            // Sort by distance, then alphabetically for commands with the same distance
+            suggestions.sort((a, b) => {
+                if (a.distance !== b.distance) {
+                    return a.distance - b.distance;
+                }
+                return a.command.localeCompare(b.command); 
+            });
+
+            if (suggestions.length > 0) {
+                let suggestionMsg = `Did you mean: ${suggestions[0].command} ?`;
+                // If a second suggestion exists AND it has the same minimal distance
+                // (already sorted alphabetically, so suggestions[0] and suggestions[1] are the chosen ones for ties)
+                if (suggestions.length > 1 && suggestions[1].distance === suggestions[0].distance) {
+                    suggestionMsg = `Did you mean: ${suggestions[0].command} or ${suggestions[1].command} ?`;
+                }
+                displayOutput(suggestionMsg);
+            }
         }
     }
     if (!slInterval) {
@@ -647,38 +704,62 @@ function levenshtein(s1, s2) {
             return;
         }
 
-        const firstArgRaw = args[0];
-        const firstArgLower = firstArgRaw.toLowerCase();
+        // Normalize the first argument for routing
+        let firstArgNormalized = args[0].toLowerCase();
+        if (firstArgNormalized === 'posts/') {
+            firstArgNormalized = 'posts';
+        } else if (firstArgNormalized === 'repo/') {
+            firstArgNormalized = 'repo';
+        } else if (firstArgNormalized === 'repos/') { // Treat "repos/" as "repo" for routing
+            firstArgNormalized = 'repo';
+        }
+        // Note: 'repos' (no slash) is also treated as 'repo' below.
 
-        if (firstArgLower === 'posts' || firstArgLower === 'posts/') {
-            // `lsPosts` can handle additional arguments like flags from the original `args` list
+        // Routing based on the normalized first argument
+        if (firstArgNormalized === 'posts') {
+            // lsPosts handles flags from the full 'args' array.
+            // e.g., if input `ls posts/ -l`, original args `['posts/', '-l']` are passed.
+            // lsPosts will correctly interpret `args[0]` for context and flags.
             await commands.lsPosts(args); 
-        } else if (firstArgLower === 'repo' || firstArgLower === 'repo/' || firstArgLower === 'repos' || firstArgLower === 'repos/') {
-            // This handles `ls repo`, `ls repo/`, `ls repos`, `ls repos/`
-            // and also `ls repo path`, `ls repo -l`, `ls repos path`
-            // `lsrepos` will receive args after "repo" or "repos", e.g., ['path', '-l'] or [] or ['path']
+        } else if (firstArgNormalized === 'repo' || firstArgNormalized === 'repos') {
+            // Handles `ls repo <path>`, `ls repo -l`, `ls repos <path>`
+            // `args.slice(1)` passes the correct arguments to lsrepos (e.g., `['<path>', '-l']` or `['-l']` or `[]`)
             await commands.lsrepos(args.slice(1));
-        } else if (firstArgLower.startsWith('repo/') || firstArgLower.startsWith('repos/')) {
-            // This handles `ls repo/path` or `ls repos/path` where the path is part of args[0]
-            // `lsrepos` expects a list of arguments, where the first is the path.
-            // We also need to pass along any flags like -l if they exist (e.g. ls repo/path -l)
-            // The path itself might contain 'repo/' or 'repos/' if the user types `ls repo/repo/foo`.
-            // `lsrepos` needs to be robust to parse `repoName` and `pathWithinRepo` from its first arg.
-            // The current lsrepos takes args like `['my-repo/src', '-l']`.
-            // If input is `ls repo/my-repo/src -l`, args to `ls` is `['repo/my-repo/src', '-l']`.
-            // So we pass this directly to `lsrepos`.
-            await commands.lsrepos(args);
+        } else if (firstArgNormalized.startsWith('repo/') || firstArgNormalized.startsWith('repos/')) {
+            // Handles `ls repo/path` or `ls repos/path` where the path is part of args[0].
+            // lsrepos expects args like `['my-repo/src', '-l']`. Original `args` is already in this format.
+            await commands.lsrepos(args); 
         } else {
+            // Fallback for cases like `ls -l` (should list root) or invalid arguments.
+            // If all arguments are flags (e.g., "ls -l", "ls -lt"), treat as root listing.
+            if (args.every(arg => arg.startsWith('-'))) {
+                 displayOutput("posts/");
+                 displayOutput("repos/");
+                 // TODO: Future enhancement could make `ls -l` at root apply long format.
+                 return;
+            }
             displayOutput(`Usage: ls [posts|repo[/path]] [-lt] or ls posts [-lt]`, 'error');
         }
     },
         cat: async (args) => {
             if (args.length === 0) { displayOutput("Usage: cat <filename>", 'error'); return; }
-            const filename = args[0];
-            const post = postsManifest.find(p => p.name === filename);
-            if (!post) { displayOutput(`cat: ${filename}: No such file or directory`, 'error'); return; }
+            let filenameInput = args[0];
+            let actualFilename = filenameInput;
+
+            if (filenameInput.toLowerCase().startsWith('posts/')) {
+                actualFilename = filenameInput.substring('posts/'.length);
+            }
+
+            // Ensure actualFilename is not empty after stripping (e.g. user typed "cat posts/")
+            if (!actualFilename) {
+                displayOutput(`cat: ${filenameInput}: Is a directory or invalid path`, 'error');
+                return;
+            }
+            
+            const post = postsManifest.find(p => p.name === actualFilename);
+            if (!post) { displayOutput(`cat: ${filenameInput}: No such file or directory`, 'error'); return; }
             try {
-                const response = await fetch(`public/posts/${filename}`);
+                const response = await fetch(`public/posts/${actualFilename}`);
                 if (!response.ok) throw new Error(`File not found or unreadable (status ${response.status})`);
                 const markdownContent = await response.text();
                 const tempRenderDiv = document.createElement('div');
@@ -696,11 +777,22 @@ function levenshtein(s1, s2) {
         },
         less: async (args) => {
             if (args.length === 0) { displayOutput("Usage: less <filename>", 'error'); return; }
-            const filename = args[0];
-            const post = postsManifest.find(p => p.name === filename);
-            if (!post) { displayOutput(`less: ${filename}: No such file`, 'error'); return; }
+            let filenameInput = args[0];
+            let actualFilename = filenameInput;
+
+            if (filenameInput.toLowerCase().startsWith('posts/')) {
+                actualFilename = filenameInput.substring('posts/'.length);
+            }
+            
+            if (!actualFilename) {
+                displayOutput(`less: ${filenameInput}: Is a directory or invalid path`, 'error');
+                return;
+            }
+
+            const post = postsManifest.find(p => p.name === actualFilename);
+            if (!post) { displayOutput(`less: ${filenameInput}: No such file`, 'error'); return; }
             try {
-                const response = await fetch(`public/posts/${filename}`);
+                const response = await fetch(`public/posts/${actualFilename}`);
                 if (!response.ok) throw new Error(`File not found (status ${response.status})`);
                 const markdownContent = await response.text();
                 const tempRenderDiv = document.createElement('div');
@@ -723,11 +815,22 @@ function levenshtein(s1, s2) {
         },
         vi: async (args) => {
             if (args.length === 0) { displayOutput("Usage: vi <filename>", 'error'); return; }
-            const filename = args[0];
-            const post = postsManifest.find(p => p.name === filename);
-            if (!post) { displayOutput(`vi: ${filename}: No such file`, 'error'); return; }
+            let filenameInput = args[0];
+            let actualFilename = filenameInput;
+
+            if (filenameInput.toLowerCase().startsWith('posts/')) {
+                actualFilename = filenameInput.substring('posts/'.length);
+            }
+
+            if (!actualFilename) {
+                displayOutput(`vi: ${filenameInput}: Is a directory or invalid path`, 'error');
+                return;
+            }
+
+            const post = postsManifest.find(p => p.name === actualFilename);
+            if (!post) { displayOutput(`vi: ${filenameInput}: No such file`, 'error'); return; }
             try {
-                const response = await fetch(`public/posts/${filename}`);
+                const response = await fetch(`public/posts/${actualFilename}`);
                 if (!response.ok) throw new Error(`File not found (status ${response.status})`);
                 const textContent = await response.text();
                 const lines = textContent.split('\n');
@@ -749,11 +852,22 @@ function levenshtein(s1, s2) {
         },
         nano: async (args) => {
             if (args.length === 0) { displayOutput("Usage: nano <filename>", 'error'); return; }
-            const filename = args[0];
-            const post = postsManifest.find(p => p.name === filename);
-            if (!post) { displayOutput(`nano: ${filename}: No such file`, 'error'); return; }
+            let filenameInput = args[0];
+            let actualFilename = filenameInput;
+            
+            if (filenameInput.toLowerCase().startsWith('posts/')) {
+                actualFilename = filenameInput.substring('posts/'.length);
+            }
+
+            if (!actualFilename) {
+                displayOutput(`nano: ${filenameInput}: Is a directory or invalid path`, 'error');
+                return;
+            }
+
+            const post = postsManifest.find(p => p.name === actualFilename);
+            if (!post) { displayOutput(`nano: ${filenameInput}: No such file`, 'error'); return; }
             try {
-                const response = await fetch(`public/posts/${filename}`);
+                const response = await fetch(`public/posts/${actualFilename}`);
                 if (!response.ok) throw new Error(`File not found (status ${response.status})`);
                 const textContent = await response.text();
                 currentView = 'nano';
@@ -888,12 +1002,15 @@ function levenshtein(s1, s2) {
                 let repos;
                 try {
                     repos = await fetchGitHubApi(`https://api.github.com/users/${owner}/repos`);
-                    if (repos.length === 0) {
+                    
+                    // Add Array.isArray check here
+                    if (!Array.isArray(repos)) {
+                        console.error('lsrepos: fetchGitHubApi did not return an array for all repos. Response:', repos);
+                        displayOutput("Error: Could not retrieve a valid list of repositories.", "error");
+                        // No further processing if repos is not an array
+                    } else if (repos.length === 0) {
                         displayOutput(`  No public repositories found for ${owner}.`);
-                        // No return here, finally will hide loading
-                    }
-
-                    if (repos && repos.length > 0) { // Process only if repos were fetched and not empty
+                    } else { // Process only if repos is an array and not empty
                         if (sortByTime) {
                             repos.sort((a, b) => new Date(b.pushed_at).getTime() - new Date(a.pushed_at).getTime());
                         } else {
@@ -930,13 +1047,31 @@ function levenshtein(s1, s2) {
                 }
             } else {
                 // Listing contents of a specific repository or a path within it.
-                const fullPathArg = args[0];
-                const pathParts = fullPathArg.split('/');
+                // args[0] could be "my-repo/src", "repo/my-repo/src", or "repos/my-repo/src"
+                // It could also be just "my-repo"
+                let fullPathArg = args[0]; 
+                let userProvidedPathForMessage = fullPathArg; // Save for error messages using 'repo/' prefix
+
+                // Normalize fullPathArg to remove "repo/" or "repos/" prefix for consistent parsing
+                let normalizedPath = fullPathArg;
+                if (normalizedPath.toLowerCase().startsWith('repo/')) {
+                    normalizedPath = normalizedPath.substring('repo/'.length);
+                    userProvidedPathForMessage = 'repo/' + normalizedPath; // Ensure error message uses 'repo/'
+                } else if (normalizedPath.toLowerCase().startsWith('repos/')) {
+                    normalizedPath = normalizedPath.substring('repos/'.length);
+                    userProvidedPathForMessage = 'repo/' + normalizedPath; // Standardize to 'repo/' for error
+                } else {
+                    // If no prefix, assume it's like 'my-repo/path', so prepend 'repo/' for error consistency
+                    userProvidedPathForMessage = 'repo/' + normalizedPath;
+                }
+
+
+                const pathParts = normalizedPath.split('/');
                 const repoName = pathParts[0];
                 const pathWithinRepo = pathParts.slice(1).join('/');
                 
                 const displayPath = `${owner}/${repoName}${pathWithinRepo ? '/' + pathWithinRepo : ''}`;
-                displayOutput(`Contents of ${displayPath}:`);
+                // Header `Contents of ${displayPath}:` is shown only if it's a directory.
                 
                 showLoadingSuggestions(outputContainer, currentInputLineDiv); // Show loading
                 let contents;
