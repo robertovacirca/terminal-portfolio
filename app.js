@@ -16,6 +16,9 @@ document.addEventListener('DOMContentLoaded', () => {
     let currentInputLineDiv = null;
     let slInterval = null;
 
+    let userRepoNamesCache = null; // Cache for GitHub repository names
+    let repoContentsCache = {};   // Cache for contents of repository paths
+
     const fortunes = [
         "Code is like humor. When you have to explain it, it’s bad. – Cory House",
         "The best way to predict the future is to invent it. – Alan Kay",
@@ -28,6 +31,27 @@ document.addEventListener('DOMContentLoaded', () => {
     ];
 
     hljs.configure({ ignoreUnescapedHTML: true });
+
+    let loadingMessageDiv = null;
+    function showLoadingSuggestions(outputContainerRef, currentInputLineDivRef) {
+        if (loadingMessageDiv) return; 
+        loadingMessageDiv = document.createElement('div');
+        loadingMessageDiv.className = 'command-output-item loader-message';
+        loadingMessageDiv.textContent = 'Fetching suggestions...';
+        if (currentInputLineDivRef && outputContainerRef.contains(currentInputLineDivRef)) {
+            outputContainerRef.insertBefore(loadingMessageDiv, currentInputLineDivRef);
+        } else {
+            outputContainerRef.appendChild(loadingMessageDiv);
+        }
+        scrollToBottom(); // Ensure it's visible
+    }
+
+    function hideLoadingSuggestions() {
+        if (loadingMessageDiv && loadingMessageDiv.parentNode) {
+            loadingMessageDiv.parentNode.removeChild(loadingMessageDiv);
+        }
+        loadingMessageDiv = null;
+    }
 
     function attemptFocus(element) {
         if (!element) return;
@@ -329,32 +353,106 @@ document.addEventListener('DOMContentLoaded', () => {
         } else if (e.key === 'Tab') {
             e.preventDefault();
             if (!activeCommandInput) return;
+
             const currentInputValue = activeCommandInput.value;
             const parts = currentInputValue.split(' ');
-            const currentWord = parts.length > 0 ? parts[parts.length - 1].toLowerCase() : "";
-            const atStartOfNewWord = currentInputValue.endsWith(" ") || (parts.length === 1 && currentWord === "");
-            const wordToComplete = atStartOfNewWord ? "" : currentWord;
+            // const currentWord = parts.length > 0 ? parts[parts.length - 1].toLowerCase() : ""; // Not strictly needed with currentArgText
+            const atStartOfNewWord = currentInputValue.endsWith(" ") || parts[parts.length -1] === ""; // If true, currentArgText will be ""
+            // const wordToComplete = atStartOfNewWord ? "" : parts[parts.length - 1]; // Replaced by currentArgText (non-lowercased)
 
-            const isCompletingCommand = parts.length === 1 && !currentInputValue.endsWith(" ");
-            const isCompletingFile = parts.length > 1 &&
-                                     ['cat', 'less', 'vi', 'nano'].includes(parts[0].toLowerCase()) &&
-                                     !currentInputValue.endsWith(" ");
-            const isCompletingManArg = parts.length > 1 && parts[0].toLowerCase() === 'man' && !currentInputValue.endsWith(" ");
             let suggestions = [];
+            const commandName = parts[0].toLowerCase(); // command is a reserved keyword in some contexts
+            const baseDirs = ["posts/", "repo/"];
 
-            if (isCompletingCommand || (parts.length === 1 && (atStartOfNewWord || currentInputValue === "" ))) {
-                suggestions = Object.keys(commands).filter(cmd => cmd.startsWith(wordToComplete));
-            } else if (isCompletingFile) {
-                 suggestions = postsManifest.filter(post => post.name.toLowerCase().startsWith(wordToComplete)).map(p => p.name);
-            } else if (isCompletingManArg) {
-                suggestions = Object.keys(commandHelp).filter(cmd => cmd.startsWith(wordToComplete) && cmd !== '?');
+            // Scenario 1: Completing the command itself
+            if (parts.length === 1 && !currentInputValue.endsWith(" ")) {
+                const commandPartToComplete = parts[0]; // wordToComplete equivalent for command
+                suggestions = Object.keys(commands).filter(cmd => cmd.startsWith(commandPartToComplete));
+            }
+            // Scenario 2: Completing arguments for a command
+            else if (parts.length >= 1 && commandName) { // Command name is present or fully typed
+                const argIndex = currentInputValue.endsWith(" ") ? parts.length : parts.length - 1;
+                const currentArgText = currentInputValue.endsWith(" ") ? "" : parts[parts.length - 1];
+
+                if (commandName === 'ls' || ['cat', 'less', 'vi', 'nano'].includes(commandName)) {
+                    if (argIndex === 1) { // Completing the first argument (path)
+                        if (currentArgText.startsWith("posts/")) {
+                            const filePrefix = currentArgText.substring("posts/".length);
+                            suggestions = postsManifest
+                                .filter(post => post.name.toLowerCase().startsWith(filePrefix.toLowerCase()))
+                                .map(p => "posts/" + p.name);
+                        } else if (currentArgText.startsWith("repo/")) {
+                            const repoPathPart = currentArgText.substring("repo/".length);
+                            const repoPathSegments = repoPathPart.split('/');
+                            
+                            if (repoPathSegments.length === 1) { // Completing repo name: "repo/my-p" or "repo/"
+                                const partialRepoName = repoPathSegments[0];
+                                if (userRepoNamesCache === null) {
+                                    showLoadingSuggestions(outputContainer, currentInputLineDiv);
+                                    try {
+                                        const repos = await fetchGitHubApi(`https://api.github.com/users/robertovacirca/repos`);
+                                        userRepoNamesCache = repos.map(r => r.name);
+                                    } catch (err) {
+                                        displayOutput(`Error fetching repositories: ${err.message}`, 'error');
+                                        userRepoNamesCache = []; // Avoid retrying on every tab for a failed fetch
+                                    } finally {
+                                        hideLoadingSuggestions();
+                                    }
+                                }
+                                suggestions = (userRepoNamesCache || [])
+                                    .filter(name => name.startsWith(partialRepoName))
+                                    .map(name => `repo/${name}/`);
+                            } else { // Completing path inside a repo: "repo/my-portfolio/sr" or "repo/my-portfolio/src/"
+                                const repoName = repoPathSegments[0];
+                                const pathPrefixSegments = repoPathSegments.slice(1, -1); // Path up to the part being completed
+                                const itemToComplete = repoPathSegments[repoPathSegments.length - 1];
+                                const cacheKey = `${repoName}/${pathPrefixSegments.join('/')}`;
+                                const fullPathToFetch = `repos/robertovacirca/${repoName}/contents/${pathPrefixSegments.join('/')}`;
+
+                                if (!repoContentsCache[cacheKey]) {
+                                    showLoadingSuggestions(outputContainer, currentInputLineDiv);
+                                    try {
+                                        const contents = await fetchGitHubApi(`https://api.github.com/repos/robertovacirca/${repoName}/contents/${pathPrefixSegments.join('/')}`);
+                                        repoContentsCache[cacheKey] = contents;
+                                    } catch (err) {
+                                        displayOutput(`Error fetching contents for ${repoName}/${pathPrefixSegments.join('/')}: ${err.message}`, 'error');
+                                        repoContentsCache[cacheKey] = []; // Avoid retrying
+                                    } finally {
+                                        hideLoadingSuggestions();
+                                    }
+                                }
+                                suggestions = (repoContentsCache[cacheKey] || [])
+                                    .filter(item => item.name.startsWith(itemToComplete))
+                                    .map(item => `repo/${repoName}/${pathPrefixSegments.join('/') ? pathPrefixSegments.join('/') + '/' : ''}${item.name}${item.type === 'dir' ? '/' : ''}`);
+                            }
+                        } else { // Suggest "posts/" or "repo/"
+                            suggestions = baseDirs.filter(dir => dir.startsWith(currentArgText));
+                        }
+                    }
+                } else if (commandName === 'man') {
+                    if (argIndex === 1) {
+                         suggestions = Object.keys(commandHelp).filter(cmd => cmd.startsWith(currentArgText) && cmd !== '?');
+                    }
+                }
             }
 
+            // Ensure suggestions are unique if multiple sources could add them
+            if (suggestions.length > 0) suggestions = [...new Set(suggestions)];
+
+
             if (suggestions.length === 1) {
-                parts[parts.length - 1] = suggestions[0];
-                let suffix = ' ';
-                if (isCompletingFile && !isCompletingCommand && !isCompletingManArg) suffix = '';
-                activeCommandInput.value = parts.join(' ') + suffix;
+                const suggestion = suggestions[0];
+                parts[parts.length - 1] = suggestion; // Replace current word with suggestion
+
+                let finalValue;
+                if (suggestion.endsWith('/')) {
+                    // For directory-like suggestions (e.g., "posts/"), complete without adding an extra space immediately after.
+                    finalValue = parts.join(' ');
+                } else {
+                    // For commands or filenames, add a space after completion.
+                    finalValue = parts.join(' ') + ' ';
+                }
+                activeCommandInput.value = finalValue;
                 activeCommandInput.setSelectionRange(activeCommandInput.value.length, activeCommandInput.value.length);
             } else if (suggestions.length > 1) {
                 displayOutput(`Suggestions: ${suggestions.join('  ')}`);
@@ -372,10 +470,8 @@ async function processCommand(commandText) {
         // Empty enter press
     } else if (command) {
         // --- NEW LOGIC START ---
-        if (command.toLowerCase() === 'ls' && args[0] && args[0].toLowerCase() === 'repos') {
-            await commands.lsrepos(args.slice(1)); // Pass 'repos' and subsequent args
-            return; // Exit after handling
-        } else if (['cat', 'less', 'vi', 'nano'].includes(command.toLowerCase()) && args[0] && args[0].toLowerCase().startsWith('repos/')) {
+        // The 'ls repos' specific handling is now managed within the main 'ls' command.
+        if (['cat', 'less', 'vi', 'nano'].includes(command.toLowerCase()) && args[0] && args[0].toLowerCase().startsWith('repos/')) {
             const filePath = args[0]; // e.g., "repos/my-repos/README.md"
             const pathParts = filePath.split('/'); // ["repos", "my-repos", "README.md"]
             if (pathParts.length >= 2 && pathParts[0].toLowerCase() === 'repos') {
@@ -402,6 +498,24 @@ async function processCommand(commandText) {
     if (!slInterval) {
          scrollToBottom();
     }
+}
+
+// Levenshtein distance function
+function levenshtein(s1, s2) {
+    if (s1.length < s2.length) { return levenshtein(s2, s1); }
+    if (s2.length === 0) { return s1.length; }
+    let previousRow = Array.from({ length: s2.length + 1 }, (_, i) => i);
+    for (let i = 0; i < s1.length; i++) {
+        let currentRow = [i + 1];
+        for (let j = 0; j < s2.length; j++) {
+            let insertions = previousRow[j + 1] + 1;
+            let deletions = currentRow[j] + 1;
+            let substitutions = previousRow[j] + (s1[i] !== s2[j]);
+            currentRow.push(Math.min(insertions, deletions, substitutions));
+        }
+        previousRow = currentRow;
+    }
+    return previousRow[previousRow.length - 1];
 }
 
     const commandHelp = {
@@ -437,45 +551,87 @@ async function processCommand(commandText) {
         '?': () => commands.help(),
         // Inside const commands = { ... }
 
-    // Original ls logic, now renamed to lsPosts
-    lsPosts: (args) => {
-        if (!postsManifest || postsManifest.length === 0) { displayOutput("No posts found. (Is posts.json loaded?)"); return; }
+        // Helper function to format date as "Mon DD YYYY"
+        formatDateForLs: (dateString) => {
+            const date = new Date(dateString);
+            const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+            const month = months[date.getMonth()];
+            const day = String(date.getDate()).padStart(2, ' '); // Keep space for single digit days if not padding with 0
+            const year = date.getFullYear();
+            return `${month} ${day} ${year}`;
+        },
+
+        // Helper function to format size in bytes to human-readable KB
+        formatSizeForLs: (bytes) => {
+            if (bytes === undefined || bytes === null) return '0.0KB';
+            const kilobytes = bytes / 1024;
+            return kilobytes.toFixed(1) + 'KB';
+        },
+
+        // Original ls logic, now renamed to lsPosts
+        lsPosts: (args) => {
+        if (!postsManifest || postsManifest.length === 0) {
+            displayOutput("No posts found. (Is posts.json loaded?)");
+            return;
+        }
+        displayOutput("Posts in /posts:"); // Header for ls posts
+
         let postsToDisplay = [...postsManifest];
-        let longFormat = args.includes('-lt'); // You might want to handle '-lt' for posts later if needed
-        if (longFormat) postsToDisplay.sort((a,b) => new Date(b.lastModified).getTime() - new Date(a.lastModified).getTime());
-        else postsToDisplay.sort((a,b) => a.name.localeCompare(b.name));
-        if (postsToDisplay.length === 0) { displayOutput("No posts available."); return; }
-        // Add indentation for posts
-        postsToDisplay.forEach(p => displayOutput(`  ${p.name}`));
+
+        const showLongFormat = args.includes('-l') || args.includes('-lt') || args.includes('-tl');
+        const sortByTime = args.includes('-t') || args.includes('-lt') || args.includes('-tl');
+
+        if (sortByTime) {
+            postsToDisplay.sort((a, b) => new Date(b.lastModified).getTime() - new Date(a.lastModified).getTime());
+        } else {
+            postsToDisplay.sort((a, b) => a.name.localeCompare(b.name));
+        }
+
+        if (postsToDisplay.length === 0) {
+            displayOutput("  No posts available.");
+            return;
+        }
+
+        if (showLongFormat) {
+            // Determine max size length for padding
+            let maxSizeStrLength = 0;
+            postsToDisplay.forEach(p => {
+                const sizeStr = commands.formatSizeForLs(p.size);
+                if (sizeStr.length > maxSizeStrLength) {
+                    maxSizeStrLength = sizeStr.length;
+                }
+            });
+
+            postsToDisplay.forEach(p => {
+                const dateStr = commands.formatDateForLs(p.lastModified);
+                const sizeStr = commands.formatSizeForLs(p.size).padStart(maxSizeStrLength, ' ');
+                // Example: Oct 26 2023 1.5KB   hello-world.md
+                // Date (11) Space Size (maxSizeStrLength) Spaces (3) Name
+                displayOutput(`  ${dateStr} ${sizeStr}   ${p.name}`);
+            });
+        } else {
+            postsToDisplay.forEach(p => displayOutput(`  ${p.name}`));
+        }
     },
 
     // New ls command for top-level directory listing
     // Inside const commands = { ... }
 
     // Make ls function asynchronous
-    ls: async (args) => { // <-- Make it async
-        if (args.length > 0) {
-            displayOutput(`ls: arguments not supported for root directory listing. Use 'ls posts' or 'ls repos'.`, 'error');
-            return;
+    ls: async (args) => {
+        if (args.length === 0) {
+            displayOutput("posts/");
+            displayOutput("repos/");
+        } else if (args.length === 1 && args[0].toLowerCase() === 'posts') {
+            await commands.lsPosts([]); // Call lsPosts for 'ls posts'
+        } else if (args.length === 1 && args[0].toLowerCase() === 'repo') {
+            await commands.lsrepos([]); // Call lsrepos for 'ls repo'
+        } else if (args.length > 0 && args[0].toLowerCase() === 'repos') {
+            // This handles 'ls repos <repo-name> ...' by delegating to lsrepos
+            await commands.lsrepos(args.slice(1));
         }
-
-        displayOutput("posts/");
-        commands.lsPosts([]); // This still works as lsPosts is synchronous
-
-        displayOutput("repos/");
-        try {
-            const owner = 'robertovacirca'; // Your GitHub username
-            displayOutput("  Fetching public repositories..."); // Temporary message
-            const repos = await fetchGitHubApi(`https://api.github.com/users/${owner}/repos`);
-            if (repos.length === 0) {
-                displayOutput(`  No public repositories found for ${owner}.`);
-            } else {
-                repos.forEach(repos => {
-                    displayOutput(`  ${repos.name}/`); // Show as directory
-                });
-            }
-        } catch (error) {
-            displayOutput(`  Error fetching repositories: ${error.message}`, 'error');
+        else {
+            displayOutput(`Usage: ls [posts|repo]`, 'error');
         }
     },
         cat: async (args) => {
@@ -680,64 +836,122 @@ async function processCommand(commandText) {
         },
         // New lsrepos command
         lsrepos: async (args) => {
-            const owner = 'robertovacirca'; // Replace with your GitHub username
-            if (args.length === 0) {
-                // ls repos: List all public repositories
+            const owner = 'robertovacirca';
+            // Determine if we are listing all repos or a specific one.
+            // If args[0] is a flag, or args is empty, we list all repos.
+            const isListingAllRepos = args.length === 0 || (args[0] && args[0].startsWith('-'));
+            
+            if (isListingAllRepos) {
+                displayOutput("Repositories in /repo:");
+                const showLongFormat = args.includes('-l') || args.includes('-lt') || args.includes('-tl');
+                const sortByTime = args.includes('-t') || args.includes('-lt') || args.includes('-tl');
+                
+                showLoadingSuggestions(outputContainer, currentInputLineDiv); // Show loading before API call
+                let repos;
                 try {
-                    displayOutput("Fetching public repositories...");
-                    const repos = await fetchGitHubApi(`https://api.github.com/users/${owner}/repos`);
+                    repos = await fetchGitHubApi(`https://api.github.com/users/${owner}/repos`);
                     if (repos.length === 0) {
-                        displayOutput(`No public repositories found for ${owner}.`);
-                        return;
+                        displayOutput(`  No public repositories found for ${owner}.`);
+                        // No return here, finally will hide loading
                     }
-                    displayOutput(`repositories for ${owner}:`);
-                    repos.forEach(repos => {
-                        displayOutput(`  ${repos.name}`);
-                    });
-                    displayOutput("");
-                    displayOutput("Use 'ls repos/<repos_name>' to view contents, or 'cat repos/<repos_name>/README.md' to view a file.");
+
+                    if (repos && repos.length > 0) { // Process only if repos were fetched and not empty
+                        if (sortByTime) {
+                            repos.sort((a, b) => new Date(b.pushed_at).getTime() - new Date(a.pushed_at).getTime());
+                        } else {
+                            repos.sort((a, b) => a.name.localeCompare(b.name));
+                        }
+
+                        if (showLongFormat) {
+                            let maxLangLen = 0;
+                            let maxStarsLen = 0;
+                            repos.forEach(repo => {
+                                const lang = repo.language || "N/A";
+                                if (lang.length > maxLangLen) maxLangLen = lang.length;
+                                const stars = String(repo.stargazers_count);
+                                if (stars.length > maxStarsLen) maxStarsLen = stars.length;
+                            });
+
+                            repos.forEach(repo => {
+                                const dateStr = commands.formatDateForLs(repo.pushed_at);
+                                const langStr = (repo.language || "N/A").padEnd(maxLangLen, ' ');
+                                const starsStr = String(repo.stargazers_count).padStart(maxStarsLen, ' ');
+                                displayOutput(`  ${dateStr} ${langStr} ★${starsStr}   ${repo.name}/`);
+                            });
+                        } else {
+                            repos.forEach(repo => {
+                                displayOutput(`  ${repo.name}/`);
+                            });
+                        }
+                    }
                 } catch (error) {
-                    displayOutput(`Error fetching repositories: ${error.message}`, 'error');
+                    // Error message already includes "Error:" prefix from fetch helpers
+                    displayOutput(`${error.message}`, 'error');
+                } finally {
+                    hideLoadingSuggestions(); // Hide loading after API call completes or fails
                 }
             } else {
-                // ls repos/<repos_name>: List contents of a specific repository
-                const reposName = args[0];
-                const path = args.slice(1).join('/'); // If it's `ls repos/my-repos/src`
+                // Listing contents of a specific repository or a path within it.
+                const fullPathArg = args[0];
+                const pathParts = fullPathArg.split('/');
+                const repoName = pathParts[0];
+                const pathWithinRepo = pathParts.slice(1).join('/');
+                
+                const displayPath = `${owner}/${repoName}${pathWithinRepo ? '/' + pathWithinRepo : ''}`;
+                displayOutput(`Contents of ${displayPath}:`);
+                
+                showLoadingSuggestions(outputContainer, currentInputLineDiv); // Show loading
+                let contents;
                 try {
-                    displayOutput(`Workspaceing contents of ${owner}/${reposName}/${path || ''}...`);
-                    const contents = await fetchGitHubApi(`https://api.github.com/repos/${owner}/${reposName}/contents/${path}`);
+                    contents = await fetchGitHubApi(`https://api.github.com/repos/${owner}/${repoName}/contents/${pathWithinRepo}`);
 
                     if (!Array.isArray(contents)) {
-                        // This might happen if 'contents' is a single file object, not a directory listing
-                        displayOutput(`Error: ${path || 'repos root'} in ${reposName} is not a directory or could not be listed.`, 'error');
-                        return;
+                        if (contents && contents.type === 'file') { // Check if 'contents' is defined
+                             displayOutput(`Error: ${displayPath} is a file, not a directory.`, 'error');
+                        } else {
+                             // Error already thrown by fetchGitHubApi for 404, this is more of a fallback.
+                             displayOutput(`Error: Path ${displayPath} not found or not a directory.`, 'error');
+                        }
+                        // No return, finally will hide loading
                     }
 
-                    if (contents.length === 0) {
-                        displayOutput(`Directory ${path || 'root'} in ${reposName} is empty.`);
-                        return;
+                    if (Array.isArray(contents) && contents.length === 0) {
+                        displayOutput(`  Directory ${displayPath} is empty.`);
+                        // No return, finally will hide loading
                     }
+                    
+                    if (Array.isArray(contents) && contents.length > 0) {
+                        contents.sort((a, b) => {
+                            if (a.type === 'dir' && b.type !== 'dir') return -1;
+                            if (a.type !== 'dir' && b.type === 'dir') return 1;
+                            return a.name.localeCompare(b.name);
+                        });
 
-                    contents.forEach(item => {
-                        const typeIndicator = item.type === 'dir' ? '/' : '';
-                        displayOutput(`  ${item.name}${typeIndicator}`);
-                    });
+                        contents.forEach(item => {
+                            const typeIndicator = item.type === 'dir' ? '/' : '';
+                            displayOutput(`  ${item.name}${typeIndicator}`);
+                        });
+                    }
                 } catch (error) {
-                    displayOutput(`Error listing contents of ${reposName}/${path}: ${error.message}`, 'error');
+                     displayOutput(`${error.message}`, 'error');
+                } finally {
+                    hideLoadingSuggestions();
                 }
             }
         },
 
         // New catrepos command
         catrepos: async (reposName, filePath) => {
-            const owner = 'robertovacirca'; // Replace with your GitHub username
+            const owner = 'robertovacirca';
             if (!reposName || !filePath) {
                 displayOutput("Usage: cat repos/<repos_name>/<file_path>", 'error');
                 return;
             }
-
+            
+            showLoadingSuggestions(outputContainer, currentInputLineDiv); // Show loading
             try {
-                displayOutput(`Workspaceing raw content of ${owner}/${reposName}/${filePath}...`);
+                // The message "Workspaceing raw content..." is not ideal, removing it for cleaner loading.
+                // displayOutput(`Workspaceing raw content of ${owner}/${reposName}/${filePath}...`); 
                 const fileContent = await fetchRawGitHubContent(owner, reposName, filePath);
 
                 const tempRenderDiv = document.createElement('div');
@@ -771,14 +985,11 @@ async function processCommand(commandText) {
                 displayOutput(tempRenderDiv.innerHTML, 'rawhtml');
 
             } catch (error) {
-                displayOutput(`cat: repos/${reposName}/${filePath}: ${error.message}`, 'error');
+                displayOutput(`${error.message}`, 'error');
+            } finally {
+                hideLoadingSuggestions();
             }
         },
-
-        // You'll need to implement lessrepos, virepos, and nanorepos similarly
-        // For lessrepos, virepos, nanorepos, you would fetch the raw content
-        // using fetchRawGitHubContent and then pass it to the modal functions
-        // (less, vi, nano) with appropriate modifications for source naming.
 
         lessrepos: async (reposName, filePath) => {
             const owner = 'robertovacirca';
@@ -786,6 +997,7 @@ async function processCommand(commandText) {
                 displayOutput("Usage: less repos/<repos_name>/<file_path>", 'error');
                 return;
             }
+            showLoadingSuggestions(outputContainer, currentInputLineDiv);
             try {
                 const fileContent = await fetchRawGitHubContent(owner, reposName, filePath);
                 const tempRenderDiv = document.createElement('div');
@@ -814,7 +1026,12 @@ async function processCommand(commandText) {
                 modalContent.innerHTML = tempRenderDiv.innerHTML;
                 modalFooter.innerHTML = `${owner}/${reposName}/${filePath} (Press 'q' to quit, Arrows/PgUp/PgDn/Home/End/Space to scroll)`;
                 modalView.style.display = 'flex'; modalContent.scrollTop = 0; if(activeCommandInput) activeCommandInput.disabled = true;
-            } catch (error) { displayOutput(`less: repos/${reposName}/${filePath}: ${error.message}`, 'error'); if(activeCommandInput) activeCommandInput.disabled = false; }
+            } catch (error) { 
+                displayOutput(`${error.message}`, 'error'); 
+                if(activeCommandInput) activeCommandInput.disabled = false; 
+            } finally {
+                hideLoadingSuggestions();
+            }
         },
 
         virepos: async (reposName, filePath) => {
@@ -823,6 +1040,7 @@ async function processCommand(commandText) {
                 displayOutput("Usage: vi repos/<repos_name>/<file_path>", 'error');
                 return;
             }
+            showLoadingSuggestions(outputContainer, currentInputLineDiv);
             try {
                 const textContent = await fetchRawGitHubContent(owner, reposName, filePath);
                 const lines = textContent.split('\n');
@@ -840,7 +1058,12 @@ async function processCommand(commandText) {
                 modalFooter.appendChild(copyAllButton);
 
                 modalView.style.display = 'flex'; modalContent.scrollTop = 0; if(activeCommandInput) activeCommandInput.disabled = true;
-            } catch (error) { displayOutput(`vi: repos/${reposName}/${filePath}: ${error.message}`, 'error'); if(activeCommandInput) activeCommandInput.disabled = false; }
+            } catch (error) { 
+                displayOutput(`${error.message}`, 'error'); 
+                if(activeCommandInput) activeCommandInput.disabled = false; 
+            } finally {
+                hideLoadingSuggestions();
+            }
         },
 
         nanorepos: async (reposName, filePath) => {
@@ -849,6 +1072,7 @@ async function processCommand(commandText) {
                 displayOutput("Usage: nano repos/<repos_name>/<file_path>", 'error');
                 return;
             }
+            showLoadingSuggestions(outputContainer, currentInputLineDiv);
             try {
                 const textContent = await fetchRawGitHubContent(owner, reposName, filePath);
                 currentView = 'nano';
@@ -864,7 +1088,12 @@ async function processCommand(commandText) {
                 modalFooter.appendChild(copyAllButton);
                 
                 modalView.style.display = 'flex'; modalContent.scrollTop = 0; if(activeCommandInput) activeCommandInput.disabled = true;
-            } catch (error) { displayOutput(`nano: repos/${reposName}/${filePath}: ${error.message}`, 'error'); if(activeCommandInput) activeCommandInput.disabled = false; }
+            } catch (error) { 
+                displayOutput(`${error.message}`, 'error'); 
+                if(activeCommandInput) activeCommandInput.disabled = false; 
+            } finally {
+                hideLoadingSuggestions();
+            }
         },
     };
     
@@ -883,36 +1112,61 @@ async function processCommand(commandText) {
 
 // Helper function to fetch from GitHub API
 async function fetchGitHubApi(url) {
+    let response;
     try {
-        const response = await fetch(url);
-        if (!response.ok) {
-            // Handle rate limiting or other API errors
-            if (response.status === 403 && response.headers.get('X-RateLimit-Remaining') === '0') {
-                const resetTime = new Date(parseInt(response.headers.get('X-RateLimit-Reset')) * 1000);
-                throw new Error(`GitHub API rate limit exceeded. Try again after ${resetTime.toLocaleTimeString()}`);
-            }
-            throw new Error(`GitHub API error! Status: ${response.status} ${response.statusText}`);
-        }
-        return await response.json();
-    } catch (error) {
-        console.error("Error fetching from GitHub API:", error);
-        throw error;
+        response = await fetch(url);
+    } catch (networkError) {
+        // Catches TypeError: Failed to fetch
+        console.error("Network error fetching from GitHub API:", networkError);
+        throw new Error(`Network request failed. Please check your internet connection.`);
     }
+
+    if (!response.ok) {
+        const status = response.status;
+        const statusText = response.statusText;
+        const requestedUrl = response.url; // Get the actual URL requested
+
+        if (status === 403 && response.headers.get('X-RateLimit-Remaining') === '0') {
+            const resetTimeEpoch = parseInt(response.headers.get('X-RateLimit-Reset')) * 1000;
+            const resetTime = new Date(resetTimeEpoch).toLocaleTimeString();
+            console.warn(`GitHub API rate limit exceeded for URL: ${requestedUrl}`);
+            throw new Error(`GitHub API rate limit exceeded. Try again after ${resetTime}.`);
+        } else if (status === 404) {
+            console.warn(`GitHub API 404 Not Found for URL: ${requestedUrl}`);
+            // Extract a more user-friendly path if possible, otherwise show URL
+            const pathPart = requestedUrl.includes('/repos/') ? requestedUrl.split('/repos/')[1] : requestedUrl;
+            throw new Error(`Error: Repository or path not found: ${pathPart}`);
+        } else {
+            console.warn(`GitHub API error for URL ${requestedUrl}: ${status} ${statusText}`);
+            throw new Error(`GitHub API Error: ${status} ${statusText}.`);
+        }
+    }
+    return await response.json();
 }
 
 // Helper to get raw file content
-async function fetchRawGitHubContent(owner, repos, path, branch = 'main') {
+async function fetchRawGitHubContent(owner, repoName, path, branch = 'main') {
+    const url = `https://raw.githubusercontent.com/${owner}/${repoName}/${branch}/${path}`;
+    let response;
     try {
-        const url = `https://raw.githubusercontent.com/${owner}/${repos}/${branch}/${path}`;
-        const response = await fetch(url);
-        if (!response.ok) {
-            throw new Error(`Could not fetch raw content for ${path}. Status: ${response.status} ${response.statusText}`);
-        }
-        return await response.text();
-    } catch (error) {
-        console.error("Error fetching raw GitHub content:", error);
-        throw error;
+        response = await fetch(url);
+    } catch (networkError) {
+        console.error("Network error fetching raw GitHub content:", networkError);
+        throw new Error(`Network request failed. Please check your internet connection.`);
     }
+
+    if (!response.ok) {
+        const status = response.status;
+        const statusText = response.statusText;
+        if (status === 404) {
+            console.warn(`Raw content 404 Not Found for URL: ${url}`);
+            throw new Error(`Error: File not found: ${owner}/${repoName}/${path}`);
+        } else {
+            console.warn(`Raw content error for URL ${url}: ${status} ${statusText}`);
+            throw new Error(`Error fetching file: ${status} ${statusText}.`);
+        }
+    }
+    return await response.text();
 }
 
 

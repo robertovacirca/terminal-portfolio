@@ -1,0 +1,16 @@
+{
+  "name": "terminal-blog",
+  "version": "1.0.0",
+  "description": "Terminal-style blog",
+  "main": "app.js",
+  "scripts": {
+    "test": "jest"
+  },
+  "devDependencies": {
+    "jest": "^29.0.0" 
+  },
+  "jest": {
+    "testEnvironment": "jsdom",
+    "setupFilesAfterEnv": ["./jest.setup.js"]
+  }
+}
