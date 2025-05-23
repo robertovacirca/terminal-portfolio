@@ -371,8 +371,7 @@ document.addEventListener('DOMContentLoaded', () => {
             }
             // Scenario 2: Completing arguments for a command
             else if (parts.length >= 1 && commandName) { // Command name is present or fully typed
-                const argIndex = currentInputValue.endsWith(" ") ? parts.length : parts.length - 1;
-                const argIndex = currentInputValue.endsWith(" ") ? parts.length : parts.length - 1;
+                const argIndex = currentInputValue.endsWith(" ") ? parts.length : parts.length - 1; // Keep only one
                 const currentArgText = currentInputValue.endsWith(" ") ? "" : parts[parts.length - 1];
 
                 // Ensure commandName is valid before proceeding with argument completion

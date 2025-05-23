@@ -295,6 +295,44 @@ async function initializeAppEnvironment() {
         },
         // ... other commands can be stubbed if needed for processCommand tests
         help: jest.fn(), // Mock other commands to avoid errors if called
+        // Define mock ...repos commands consistently for tests
+        catrepos: async (repoName, filePath) => {
+            mockShowLoadingSuggestions();
+            try {
+                const content = await global.fetchRawGitHubContent('robertovacirca', repoName, filePath);
+                mockDisplayOutput(global.marked.parse(content), 'rawhtml'); // Use global.marked from setup
+            } catch (e) {
+                mockDisplayOutput(e.message, 'error');
+            } finally {
+                mockHideLoadingSuggestions();
+            }
+        },
+        lessrepos: async (repoName, filePath) => { /* Similar simplified mock */ mockShowLoadingSuggestions(); try { await global.fetchRawGitHubContent('robertovacirca', repoName, filePath); mockDisplayOutput(`less content for ${repoName}/${filePath}`); } catch(e) { mockDisplayOutput(e.message, 'error'); } finally { mockHideLoadingSuggestions(); } },
+        virepos: async (repoName, filePath) => { /* Similar simplified mock */ mockShowLoadingSuggestions(); try { await global.fetchRawGitHubContent('robertovacirca', repoName, filePath); mockDisplayOutput(`vi content for ${repoName}/${filePath}`); } catch(e) { mockDisplayOutput(e.message, 'error'); } finally { mockHideLoadingSuggestions(); }  },
+        nanorepos: async (repoName, filePath) => { /* Similar simplified mock */ mockShowLoadingSuggestions(); try { await global.fetchRawGitHubContent('robertovacirca', repoName, filePath); mockDisplayOutput(`nano content for ${repoName}/${filePath}`); } catch(e) { mockDisplayOutput(e.message, 'error'); } finally { mockHideLoadingSuggestions(); }  },
+        // Mock local file commands as well for completeness in global.commands
+        cat: async (args) => {
+            let filenameInput = args[0];
+            let actualFilename = filenameInput;
+            if (filenameInput.toLowerCase().startsWith('posts/')) {
+                actualFilename = filenameInput.substring('posts/'.length);
+            }
+            if (!actualFilename) { mockDisplayOutput(`cat: ${filenameInput}: Is a directory or invalid path`, 'error'); return; }
+            const post = mockPostsManifest.find(p => p.name === actualFilename);
+            if (!post) { mockDisplayOutput(`cat: ${filenameInput}: No such file or directory`, 'error'); return; }
+            try {
+                const response = await global.fetch(`public/posts/${actualFilename}`); // Uses global fetch
+                if (!response.ok) throw new Error('File not found');
+                const markdownContent = await response.text();
+                mockDisplayOutput(global.marked.parse(markdownContent), 'rawhtml');
+            } catch (error) { mockDisplayOutput(`cat: ${filenameInput}: ${error.message}`, 'error'); }
+        },
+        // Add simplified less, vi, nano mocks if their specific modal logic isn't under test by processCommand tests
+        less: async (args) => { /* simplified, similar to cat */ if (args.length === 0) { mockDisplayOutput("Usage: less <filename>", "error"); return; } mockDisplayOutput(`less ${args[0]}`); },
+        vi: async (args) => { /* simplified */ if (args.length === 0) { mockDisplayOutput("Usage: vi <filename>", "error"); return; } mockDisplayOutput(`vi ${args[0]}`); },
+        nano: async (args) => { /* simplified */ if (args.length === 0) { mockDisplayOutput("Usage: nano <filename>", "error"); return; } mockDisplayOutput(`nano ${args[0]}`); },
+
+
     };
     
     // If app.js defines these globally, tests can spy on them.
@@ -342,39 +380,87 @@ async function initializeAppEnvironment() {
 
 // This is a simplified mock of app.js's processCommand
 // In a real test setup, you'd import the actual processCommand or structure app.js for better testability.
-async function processCommand(commandText) {
+async function processCommand(commandText) { 
     const parts = commandText.split(/\s+/).filter(s => s.length > 0);
     const command = parts[0];
     const args = parts.slice(1);
 
-    if (!command) return;
+    if (!command && commandText === "") { return; } 
+    
+    if (command) {
+        // Special routing for cat, less, vi, nano for repo paths (mirroring app.js)
+        if (['cat', 'less', 'vi', 'nano'].includes(command.toLowerCase()) && 
+            args[0] && 
+            (args[0].toLowerCase().startsWith('repo/') || args[0].toLowerCase().startsWith('repos/'))) {
+            
+            const fullPathArg = args[0]; 
+            let pathWithoutPrefix = '';
+            
+            if (fullPathArg.toLowerCase().startsWith('repo/')) {
+                pathWithoutPrefix = fullPathArg.substring('repo/'.length);
+            } else if (fullPathArg.toLowerCase().startsWith('repos/')) {
+                pathWithoutPrefix = fullPathArg.substring('repos/'.length);
+            }
 
-    const cmdFunc = global.commands[command.toLowerCase()];
-    if (cmdFunc) {
-        try {
-            await cmdFunc(args);
-        } catch (error) {
-            global.displayOutput(`Error during ${command}: ${error.message}`, 'error');
-        }
-    } else {
-        global.displayOutput(`bash: command not found: ${command}`, 'error');
-        // Levenshtein suggestion logic from app.js
-        const commandNames = Object.keys(global.commands);
-        const threshold = 2;
-        let suggestions = [];
-        for (const validCommand of commandNames) {
-            const distance = global.levenshtein(command, validCommand);
-            if (distance <= threshold) {
-                suggestions.push({ command: validCommand, distance: distance });
+            const pathParts = pathWithoutPrefix.split('/');
+            
+            if (pathParts.length >= 1 && pathParts[0]) { 
+                const repoName = pathParts[0];
+                const fileOrDirPath = pathParts.slice(1).join('/'); 
+
+                if (!fileOrDirPath && ['cat', 'less', 'vi', 'nano'].includes(command.toLowerCase())) { 
+                    global.displayOutput(`${command}: '${fullPathArg}' is a directory. Please specify a file path.`, 'error');
+                    return; 
+                }
+                
+                const targetReposCommandName = command.toLowerCase() + 'repos';
+                if (global.commands[targetReposCommandName]) { 
+                    await global.commands[targetReposCommandName](repoName, fileOrDirPath);
+                } else {
+                    console.error(`Mock processCommand: Internal error: Command ${targetReposCommandName} not found in global.commands.`);
+                    global.displayOutput(`Error: Command ${command} does not support repository operations for ${targetReposCommandName}.`, 'error');
+                }
+                return; 
+            } else { 
+                 global.displayOutput(`${command}: Invalid repository path specified: '${fullPathArg}'`, 'error');
+                 return;
             }
         }
-        suggestions.sort((a, b) => a.distance - b.distance);
-        if (suggestions.length > 0) {
-            let suggestionMsg = `Did you mean: ${suggestions[0].command} ?`;
-            if (suggestions.length > 1 && suggestions[1].distance === suggestions[0].distance && suggestions[1].command !== suggestions[0].command) {
-                suggestionMsg = `Did you mean: ${suggestions[0].command} or ${suggestions[1].command} ?`;
+
+        // Default command handling (includes local posts for cat, etc.)
+        const cmdFunc = global.commands[command.toLowerCase()]; 
+        if (cmdFunc) {
+            try {
+                await cmdFunc(args);
+            } catch (error) {
+                console.error(`Mock processCommand: Error executing command '${command}':`, error); 
+                global.displayOutput(`Error during ${command}: ${error.message}`, 'error');
             }
-            global.displayOutput(suggestionMsg);
+        } else {
+            global.displayOutput(`bash: command not found: ${command}`, 'error');
+            const commandNames = Object.keys(global.commands); 
+            const threshold = 2;
+            let suggestions = [];
+            for (const validCommand of commandNames) {
+                if (validCommand === "?" && command !== "?" && command.length > 1) continue;
+                const distance = global.levenshtein(command, validCommand); 
+                if (distance <= threshold) {
+                    suggestions.push({ command: validCommand, distance: distance });
+                }
+            }
+            suggestions.sort((a, b) => {
+                if (a.distance !== b.distance) {
+                    return a.distance - b.distance;
+                }
+                return a.command.localeCompare(b.command); 
+            });
+            if (suggestions.length > 0) {
+                let suggestionMsg = `Did you mean: ${suggestions[0].command} ?`;
+                if (suggestions.length > 1 && suggestions[1].distance === suggestions[0].distance) {
+                    suggestionMsg = `Did you mean: ${suggestions[0].command} or ${suggestions[1].command} ?`;
+                }
+                global.displayOutput(suggestionMsg);
+            }
         }
     }
 }
@@ -382,7 +468,7 @@ global.processCommand = processCommand;
 
 // This is a highly simplified mock of app.js's handleCommandInputKeydown for tab completion
 // Ideally, the suggestion logic from app.js would be extracted into a testable function.
-async function handleCommandInputKeydown(event) {
+async function handleCommandInputKeydown(event) { // Ensure this mock is identical to app.js's version for tab completion logic
     if (event.key !== 'Tab') return;
     event.preventDefault();
 
@@ -395,7 +481,7 @@ async function handleCommandInputKeydown(event) {
     if (parts.length === 1 && !currentInputValue.endsWith(" ")) {
         const commandPartToComplete = parts[0];
         suggestions = Object.keys(global.commands).filter(cmd => cmd.startsWith(commandPartToComplete));
-    } else if (parts.length >= 1 && commandName) {
+    } else if (parts.length >= 1 && commandName && global.commands[commandName]) { 
         const argIndex = currentInputValue.endsWith(" ") ? parts.length : parts.length - 1;
         const currentArgText = currentInputValue.endsWith(" ") ? "" : parts[parts.length - 1];
 
@@ -409,20 +495,20 @@ async function handleCommandInputKeydown(event) {
                 } else if (currentArgText.startsWith("repo/")) {
                     const repoPathPart = currentArgText.substring("repo/".length);
                     const repoPathSegments = repoPathPart.split('/');
-                    if (repoPathSegments.length === 1) {
+                    if (repoPathSegments.length === 1) { // Completing repo name
                         const partialRepoName = repoPathSegments[0];
                         if (global.userRepoNamesCache === null) {
                             mockShowLoadingSuggestions();
                             try {
-                                const repos = await global.fetch(`https://api.github.com/users/robertovacirca/repos`).then(r => r.json()); // Simplified fetch
-                                global.userRepoNamesCache = repos.map(r => r.name);
-                            } catch (err) { global.displayOutput(`Error: ${err.message}`, 'error'); global.userRepoNamesCache = []; } 
+                                const repos = await global.fetchGitHubApi(`https://api.github.com/users/robertovacirca/repos`);
+                                if(Array.isArray(repos)) { global.userRepoNamesCache = repos.map(r => r.name); } else { global.userRepoNamesCache = []; }
+                            } catch (err) { global.displayOutput(`Error fetching suggestions: ${err.message}`, 'error'); global.userRepoNamesCache = []; } 
                             finally { mockHideLoadingSuggestions(); }
                         }
                         suggestions = (global.userRepoNamesCache || [])
                             .filter(name => name.startsWith(partialRepoName))
                             .map(name => `repo/${name}/`);
-                    } else {
+                    } else { // Completing path inside a repo
                         const repoName = repoPathSegments[0];
                         const pathPrefixSegments = repoPathSegments.slice(1, -1);
                         const itemToComplete = repoPathSegments[repoPathSegments.length - 1];
@@ -430,12 +516,18 @@ async function handleCommandInputKeydown(event) {
                         if (!global.repoContentsCache[cacheKey]) {
                              mockShowLoadingSuggestions();
                             try {
-                                const contents = await global.fetch(`https://api.github.com/repos/robertovacirca/${repoName}/contents/${pathPrefixSegments.join('/')}`).then(r=>r.json());
-                                global.repoContentsCache[cacheKey] = contents;
-                            } catch (err) { global.displayOutput(`Error: ${err.message}`, 'error'); global.repoContentsCache[cacheKey] = []; }
+                                const contents = await global.fetchGitHubApi(`https://api.github.com/repos/robertovacirca/${repoName}/contents/${pathPrefixSegments.join('/')}`);
+                                if(Array.isArray(contents)) {
+                                    global.repoContentsCache[cacheKey] = contents;
+                                } else {
+                                    console.warn(`Tab completion mock: Expected array for ${cacheKey}, received:`, contents);
+                                    global.repoContentsCache[cacheKey] = []; // Ensure array for cache
+                                }
+                            } catch (err) { global.displayOutput(`Error fetching suggestions: ${err.message}`, 'error'); global.repoContentsCache[cacheKey] = []; }
                             finally { mockHideLoadingSuggestions(); }
                         }
-                        suggestions = (global.repoContentsCache[cacheKey] || [])
+                        const cachedItems = Array.isArray(global.repoContentsCache[cacheKey]) ? global.repoContentsCache[cacheKey] : [];
+                        suggestions = cachedItems
                             .filter(item => item.name.startsWith(itemToComplete))
                             .map(item => `repo/${repoName}/${pathPrefixSegments.join('/') ? pathPrefixSegments.join('/') + '/' : ''}${item.name}${item.type === 'dir' ? '/' : ''}`);
                     }
@@ -523,9 +615,14 @@ describe('Terminal App Core Features', () => {
     });
 
     test('ls repo should list repo names', async () => {
-      global.fetch.mockResolvedValueOnce({ // For fetchGitHubApi
+      const expectedUrl = 'https://api.github.com/users/robertovacirca/repos';
+      global.fetch.mockResolvedValueOnce({ 
         ok: true,
-        json: () => Promise.resolve([{ name: 'repo1', pushed_at: '', language: '', stargazers_count: 0 }, { name: 'repo2' }]),
+        json: () => Promise.resolve([
+            { name: 'repo1', pushed_at: '2023-01-01T10:00:00Z', language: 'JavaScript', stargazers_count: 5 }, 
+            { name: 'repo2', pushed_at: '2023-01-02T10:00:00Z', language: 'Python', stargazers_count: 10 }
+        ]),
+        url: expectedUrl 
       });
       await global.commands.ls(['repo']);
       expect(mockDisplayOutput).toHaveBeenCalledWith('Repositories in /repo:');
@@ -536,9 +633,11 @@ describe('Terminal App Core Features', () => {
     });
     
     test('ls -l repo should list repos in long format', async () => {
+      const expectedUrl = 'https://api.github.com/users/robertovacirca/repos';
       global.fetch.mockResolvedValueOnce({
         ok: true,
         json: () => Promise.resolve([{ name: 'repo1', pushed_at: '2023-01-15T10:00:00Z', language: 'JavaScript', stargazers_count: 10 }]),
+        url: expectedUrl
       });
       await global.commands.ls(['repo', '-l']);
       expect(mockDisplayOutput).toHaveBeenCalledWith('Repositories in /repo:');
@@ -561,11 +660,17 @@ describe('Terminal App Core Features', () => {
     });
 
     test('ls repo my-repo/src should list contents of a specific repo path', async () => {
-      global.fetch.mockResolvedValueOnce({ // For fetchGitHubApi (repo contents)
+      const owner = 'robertovacirca';
+      const repoName = 'my-repo';
+      const dirPath = 'src';
+      const expectedUrl = `https://api.github.com/repos/${owner}/${repoName}/contents/${dirPath}`;
+      
+      global.fetch.mockResolvedValueOnce({ 
         ok: true,
         json: () => Promise.resolve([{ name: 'file.js', type: 'file' }, { name: 'subdir', type: 'dir' }]),
+        url: expectedUrl 
       });
-      await global.commands.ls(['repo', 'my-repo/src']);
+      await global.commands.ls(['repo', `${repoName}/${dirPath}`]);
       expect(mockDisplayOutput).toHaveBeenCalledWith('Contents of robertovacirca/my-repo/src:');
       expect(mockDisplayOutput).toHaveBeenCalledWith('  file.js');
       expect(mockDisplayOutput).toHaveBeenCalledWith('  subdir/');
