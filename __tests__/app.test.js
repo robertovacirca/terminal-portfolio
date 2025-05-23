@@ -469,6 +469,120 @@ describe('Terminal App Core Features', () => {
     });
   });
 
+  describe('Bug Fix Specific Tests', () => {
+    test('ls posts/ (with trailing slash) should behave like ls posts', async () => {
+      mockPostsManifest.push({ name: 'post1.md', lastModified: '', size: 0 });
+      // Simulate 'ls posts/' being passed from processCommand to commands.ls
+      await global.commands.ls(['posts/']);
+      expect(mockDisplayOutput).toHaveBeenCalledWith('Posts in /posts:');
+      expect(mockDisplayOutput).toHaveBeenCalledWith('  post1.md');
+    });
+
+    test('ls repo/ (with trailing slash) should behave like ls repo', async () => {
+      global.fetch.mockResolvedValueOnce({ // For fetchGitHubApi
+        ok: true,
+        json: () => Promise.resolve([{ name: 'repo1', pushed_at: '', language: '', stargazers_count: 0 }]),
+      });
+      // Simulate 'ls repo/' being passed from processCommand to commands.ls
+      await global.commands.ls(['repo/']);
+      expect(mockDisplayOutput).toHaveBeenCalledWith('Repositories in /repo:');
+      expect(mockDisplayOutput).toHaveBeenCalledWith('  repo1/');
+      expect(mockShowLoadingSuggestions).toHaveBeenCalledTimes(1);
+      expect(mockHideLoadingSuggestions).toHaveBeenCalledTimes(1);
+    });
+
+    test('ls repo/my-repo/README.md (file path) should show specific error', async () => {
+      const owner = 'robertovacirca'; // As used in lsrepos
+      const repoName = 'my-repo';
+      const fileName = 'README.md';
+      const fullPath = `${repoName}/${fileName}`; // e.g., my-repo/README.md
+
+      global.fetch.mockResolvedValueOnce({ // For fetchGitHubApi (simulating it returns a file object)
+        ok: true,
+        json: () => Promise.resolve({ type: 'file', name: fileName, path: fileName }),
+      });
+      
+      // commands.ls will call commands.lsrepos with [fullPath]
+      await global.commands.ls([`repo/${fullPath}`]); 
+      
+      const expectedUserPath = `repo/${repoName}/${fileName}`;
+      expect(mockDisplayOutput).toHaveBeenCalledWith(
+        `ls: cannot access '${expectedUserPath}': It is a file. Use 'cat' or 'less' to view its content.`,
+        'error'
+      );
+      expect(mockShowLoadingSuggestions).toHaveBeenCalledTimes(1);
+      expect(mockHideLoadingSuggestions).toHaveBeenCalledTimes(1);
+    });
+
+    test('ls repo/my-repo/src_directory (directory path) should list contents', async () => {
+      const owner = 'robertovacirca';
+      const repoName = 'my-repo';
+      const dirName = 'src_directory';
+      const fullPath = `${repoName}/${dirName}`;
+
+      global.fetch.mockResolvedValueOnce({ // For fetchGitHubApi (simulating directory contents)
+        ok: true,
+        json: () => Promise.resolve([{ name: 'file.js', type: 'file' }]),
+      });
+      await global.commands.ls([`repo/${fullPath}`]);
+      expect(mockDisplayOutput).toHaveBeenCalledWith(`Contents of ${owner}/${repoName}/${dirName}:`);
+      expect(mockDisplayOutput).toHaveBeenCalledWith('  file.js');
+    });
+    
+    test('cat repo/my-repo/actual-file.md should display file content', async () => {
+      const repoName = 'my-repo';
+      const fileName = 'actual-file.md';
+      const fileContent = '## Hello Markdown';
+      
+      // Mock for fetchRawGitHubContent used by catrepos
+      global.fetch.mockResolvedValueOnce({
+        ok: true,
+        text: () => Promise.resolve(fileContent),
+      });
+
+      // Simulate calling 'cat repo/my-repo/actual-file.md' via processCommand
+      // This tests the routing in processCommand and the execution of catrepos.
+      // Need to ensure catrepos is defined in our mocked commands object if not already.
+      if (!global.commands.catrepos) {
+        global.commands.catrepos = async (rn, fp) => {
+            mockShowLoadingSuggestions();
+            try {
+                const content = await global.fetchRawGitHubContent('robertovacirca', rn, fp); // Uses mocked fetch
+                // Simplified output for test, actual catrepos does more (Markdown parsing)
+                mockDisplayOutput(content, 'rawhtml'); 
+            } catch (e) {
+                mockDisplayOutput(e.message, 'error');
+            } finally {
+                mockHideLoadingSuggestions();
+            }
+        };
+      }
+      await global.processCommand(`cat repo/${repoName}/${fileName}`);
+      
+      expect(mockShowLoadingSuggestions).toHaveBeenCalled();
+      // marked.parse is mocked in jest.setup.js to return "parsed:"+input
+      expect(mockDisplayOutput).toHaveBeenCalledWith(`parsed:${fileContent}`, 'rawhtml');
+      expect(mockHideLoadingSuggestions).toHaveBeenCalled();
+    });
+
+     test('cat repos/my-repo/another-file.md (with "repos/" prefix) should also display content', async () => {
+      const repoName = 'my-repo';
+      const fileName = 'another-file.md';
+      const fileContent = '## Another File';
+      
+      global.fetch.mockResolvedValueOnce({
+        ok: true,
+        text: () => Promise.resolve(fileContent),
+      });
+
+      if (!global.commands.catrepos) { // Ensure catrepos mock from previous test or define here
+        global.commands.catrepos = async (rn, fp) => { /* same as above */ };
+      }
+      await global.processCommand(`cat repos/${repoName}/${fileName}`);
+      expect(mockDisplayOutput).toHaveBeenCalledWith(`parsed:${fileContent}`, 'rawhtml');
+    });
+  });
+
   describe('Tab Autocompletion', () => {
     // Helper to set input value and simulate Tab press
     async function simulateTabCompletion(inputValue) {

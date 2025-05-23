@@ -470,14 +470,36 @@ async function processCommand(commandText) {
         // Empty enter press
     } else if (command) {
         // --- NEW LOGIC START ---
-        // The 'ls repos' specific handling is now managed within the main 'ls' command.
-        if (['cat', 'less', 'vi', 'nano'].includes(command.toLowerCase()) && args[0] && args[0].toLowerCase().startsWith('repos/')) {
-            const filePath = args[0]; // e.g., "repos/my-repos/README.md"
-            const pathParts = filePath.split('/'); // ["repos", "my-repos", "README.md"]
-            if (pathParts.length >= 2 && pathParts[0].toLowerCase() === 'repos') {
-                const reposName = pathParts[1];
-                const fileOrDirPath = pathParts.slice(2).join('/'); // The rest of the path
-                await commands[command.toLowerCase() + 'repos'](reposName, fileOrDirPath);
+        // Handles commands like 'cat repo/my-repo/file.md'
+        if (['cat', 'less', 'vi', 'nano'].includes(command.toLowerCase()) && 
+            args[0] && 
+            (args[0].toLowerCase().startsWith('repo/') || args[0].toLowerCase().startsWith('repos/'))) {
+            
+            const fullPathArg = args[0]; // e.g., "repo/my-repo/README.md" or "repos/my-repo/README.md"
+            let pathWithoutPrefix = '';
+            
+            if (fullPathArg.toLowerCase().startsWith('repo/')) {
+                pathWithoutPrefix = fullPathArg.substring('repo/'.length);
+            } else if (fullPathArg.toLowerCase().startsWith('repos/')) {
+                pathWithoutPrefix = fullPathArg.substring('repos/'.length);
+            }
+
+            const pathParts = pathWithoutPrefix.split('/'); // e.g., ["my-repo", "README.md"]
+            
+            if (pathParts.length >= 1) { // Must have at least a repo name
+                const repoName = pathParts[0];
+                const fileOrDirPath = pathParts.slice(1).join('/'); // Can be empty if it's just a repo name (though cat/less etc. need a file)
+
+                if (!fileOrDirPath) { // Check if fileOrDirPath is empty, meaning only repo name was passed
+                    displayOutput(`${command}: '${fullPathArg}' is a directory or invalid file path.`, 'error');
+                    // We don't return yet, let the actual command logic try if it wants, or fail.
+                    // Or, we could return here:
+                    // createNewInputLine(); // if we were to return early
+                    // return; 
+                }
+                 // Call the appropriate command (e.g., catrepos, lessrepos)
+                 // The target functions (catrepos etc.) expect (repoName, filePath)
+                await commands[command.toLowerCase() + 'repos'](repoName, fileOrDirPath);
                 return; // Exit after handling
             }
         }
@@ -622,16 +644,32 @@ function levenshtein(s1, s2) {
         if (args.length === 0) {
             displayOutput("posts/");
             displayOutput("repos/");
-        } else if (args.length === 1 && args[0].toLowerCase() === 'posts') {
-            await commands.lsPosts([]); // Call lsPosts for 'ls posts'
-        } else if (args.length === 1 && args[0].toLowerCase() === 'repo') {
-            await commands.lsrepos([]); // Call lsrepos for 'ls repo'
-        } else if (args.length > 0 && args[0].toLowerCase() === 'repos') {
-            // This handles 'ls repos <repo-name> ...' by delegating to lsrepos
-            await commands.lsrepos(args.slice(1));
+            return;
         }
-        else {
-            displayOutput(`Usage: ls [posts|repo]`, 'error');
+
+        const firstArgRaw = args[0];
+        const firstArgLower = firstArgRaw.toLowerCase();
+
+        if (firstArgLower === 'posts' || firstArgLower === 'posts/') {
+            // `lsPosts` can handle additional arguments like flags from the original `args` list
+            await commands.lsPosts(args); 
+        } else if (firstArgLower === 'repo' || firstArgLower === 'repo/' || firstArgLower === 'repos' || firstArgLower === 'repos/') {
+            // This handles `ls repo`, `ls repo/`, `ls repos`, `ls repos/`
+            // and also `ls repo path`, `ls repo -l`, `ls repos path`
+            // `lsrepos` will receive args after "repo" or "repos", e.g., ['path', '-l'] or [] or ['path']
+            await commands.lsrepos(args.slice(1));
+        } else if (firstArgLower.startsWith('repo/') || firstArgLower.startsWith('repos/')) {
+            // This handles `ls repo/path` or `ls repos/path` where the path is part of args[0]
+            // `lsrepos` expects a list of arguments, where the first is the path.
+            // We also need to pass along any flags like -l if they exist (e.g. ls repo/path -l)
+            // The path itself might contain 'repo/' or 'repos/' if the user types `ls repo/repo/foo`.
+            // `lsrepos` needs to be robust to parse `repoName` and `pathWithinRepo` from its first arg.
+            // The current lsrepos takes args like `['my-repo/src', '-l']`.
+            // If input is `ls repo/my-repo/src -l`, args to `ls` is `['repo/my-repo/src', '-l']`.
+            // So we pass this directly to `lsrepos`.
+            await commands.lsrepos(args);
+        } else {
+            displayOutput(`Usage: ls [posts|repo[/path]] [-lt] or ls posts [-lt]`, 'error');
         }
     },
         cat: async (args) => {
@@ -903,37 +941,39 @@ function levenshtein(s1, s2) {
                 showLoadingSuggestions(outputContainer, currentInputLineDiv); // Show loading
                 let contents;
                 try {
+                    // fullPathArg is the first argument passed to lsrepos, e.g., "my-repo/src/file.js" or "my-repo"
+                    // It could also contain flags if ls repos -l was called, but isListingAllRepos handles that.
                     contents = await fetchGitHubApi(`https://api.github.com/repos/${owner}/${repoName}/contents/${pathWithinRepo}`);
 
-                    if (!Array.isArray(contents)) {
-                        if (contents && contents.type === 'file') { // Check if 'contents' is defined
-                             displayOutput(`Error: ${displayPath} is a file, not a directory.`, 'error');
+                    // Check if the path is a file first
+                    if (contents && typeof contents === 'object' && !Array.isArray(contents) && contents.type === 'file') {
+                        const userPathForFileError = `repo/${repoName}${pathWithinRepo ? '/' + pathWithinRepo : ''}`;
+                        displayOutput(`ls: cannot access '${userPathForFileError}': It is a file. Use 'cat' or 'less' to view its content.`, 'error');
+                    } else if (Array.isArray(contents)) { // It's a directory listing
+                        displayOutput(`Contents of ${displayPath}:`); // Display header only for actual directories
+                        if (contents.length === 0) {
+                            displayOutput(`  Directory ${displayPath} is empty.`);
                         } else {
-                             // Error already thrown by fetchGitHubApi for 404, this is more of a fallback.
-                             displayOutput(`Error: Path ${displayPath} not found or not a directory.`, 'error');
+                            contents.sort((a, b) => {
+                                if (a.type === 'dir' && b.type !== 'dir') return -1;
+                                if (a.type !== 'dir' && b.type === 'dir') return 1;
+                                return a.name.localeCompare(b.name);
+                            });
+
+                            contents.forEach(item => {
+                                const typeIndicator = item.type === 'dir' ? '/' : '';
+                                displayOutput(`  ${item.name}${typeIndicator}`);
+                            });
                         }
-                        // No return, finally will hide loading
-                    }
-
-                    if (Array.isArray(contents) && contents.length === 0) {
-                        displayOutput(`  Directory ${displayPath} is empty.`);
-                        // No return, finally will hide loading
-                    }
-                    
-                    if (Array.isArray(contents) && contents.length > 0) {
-                        contents.sort((a, b) => {
-                            if (a.type === 'dir' && b.type !== 'dir') return -1;
-                            if (a.type !== 'dir' && b.type === 'dir') return 1;
-                            return a.name.localeCompare(b.name);
-                        });
-
-                        contents.forEach(item => {
-                            const typeIndicator = item.type === 'dir' ? '/' : '';
-                            displayOutput(`  ${item.name}${typeIndicator}`);
-                        });
+                    } else {
+                        // This case handles errors where 'contents' is not an array (and not a file object),
+                        // or if fetchGitHubApi threw an error that wasn't caught (though it should have been).
+                        // The fetchGitHubApi should have already thrown a specific error for 404s.
+                        // This can act as a fallback if contents is unexpectedly undefined or not an object/array.
+                         displayOutput(`Error: Could not list contents of ${displayPath}. Path may be invalid or an unexpected error occurred.`, 'error');
                     }
                 } catch (error) {
-                     displayOutput(`${error.message}`, 'error');
+                     displayOutput(`${error.message}`, 'error'); // Error from fetchGitHubApi (404, rate limit, etc.)
                 } finally {
                     hideLoadingSuggestions();
                 }
@@ -943,8 +983,8 @@ function levenshtein(s1, s2) {
         // New catrepos command
         catrepos: async (reposName, filePath) => {
             const owner = 'robertovacirca';
-            if (!reposName || !filePath) {
-                displayOutput("Usage: cat repos/<repos_name>/<file_path>", 'error');
+            if (!reposName || !filePath) { // filePath being empty means it's not a valid file path for cat
+                displayOutput(`Usage: cat repo/<repo_name>/<file_path>`, 'error');
                 return;
             }
             
@@ -994,7 +1034,7 @@ function levenshtein(s1, s2) {
         lessrepos: async (reposName, filePath) => {
             const owner = 'robertovacirca';
             if (!reposName || !filePath) {
-                displayOutput("Usage: less repos/<repos_name>/<file_path>", 'error');
+                displayOutput(`Usage: less repo/<repo_name>/<file_path>`, 'error');
                 return;
             }
             showLoadingSuggestions(outputContainer, currentInputLineDiv);
@@ -1037,7 +1077,7 @@ function levenshtein(s1, s2) {
         virepos: async (reposName, filePath) => {
             const owner = 'robertovacirca';
             if (!reposName || !filePath) {
-                displayOutput("Usage: vi repos/<repos_name>/<file_path>", 'error');
+                displayOutput(`Usage: vi repo/<repo_name>/<file_path>`, 'error');
                 return;
             }
             showLoadingSuggestions(outputContainer, currentInputLineDiv);
@@ -1069,7 +1109,7 @@ function levenshtein(s1, s2) {
         nanorepos: async (reposName, filePath) => {
             const owner = 'robertovacirca';
             if (!reposName || !filePath) {
-                displayOutput("Usage: nano repos/<repos_name>/<file_path>", 'error');
+                displayOutput(`Usage: nano repo/<repo_name>/<file_path>`, 'error');
                 return;
             }
             showLoadingSuggestions(outputContainer, currentInputLineDiv);
