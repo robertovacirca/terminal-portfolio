@@ -72,8 +72,6 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     });
     
-
-
     function scrollToBottom() {
         setTimeout(() => {
             if (outputContainer) outputContainer.scrollTop = outputContainer.scrollHeight;
@@ -365,28 +363,46 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
-    async function processCommand(commandText) {
-        const [command, ...args] = commandText.split(/\s+/).filter(s => s.length > 0);
+async function processCommand(commandText) {
+    const parts = commandText.split(/\s+/).filter(s => s.length > 0);
+    const command = parts[0];
+    const args = parts.slice(1);
 
-        if (!command && commandText === "") {
-            // Empty enter press
-        } else if (command) {
-            const cmdFunc = commands[command.toLowerCase()];
-            if (cmdFunc) {
-                try {
-                    await cmdFunc(args);
-                } catch (error) {
-                    console.error(`Error executing command '${command}':`, error);
-                    displayOutput(`Error during ${command}: ${error.message}`, 'error');
-                }
-            } else {
-                displayOutput(`bash: command not found: ${command}`, 'error');
+    if (!command && commandText === "") {
+        // Empty enter press
+    } else if (command) {
+        // --- NEW LOGIC START ---
+        if (command.toLowerCase() === 'ls' && args[0] && args[0].toLowerCase() === 'repos') {
+            await commands.lsrepos(args.slice(1)); // Pass 'repos' and subsequent args
+            return; // Exit after handling
+        } else if (['cat', 'less', 'vi', 'nano'].includes(command.toLowerCase()) && args[0] && args[0].toLowerCase().startsWith('repos/')) {
+            const filePath = args[0]; // e.g., "repos/my-repos/README.md"
+            const pathParts = filePath.split('/'); // ["repos", "my-repos", "README.md"]
+            if (pathParts.length >= 2 && pathParts[0].toLowerCase() === 'repos') {
+                const reposName = pathParts[1];
+                const fileOrDirPath = pathParts.slice(2).join('/'); // The rest of the path
+                await commands[command.toLowerCase() + 'repos'](reposName, fileOrDirPath);
+                return; // Exit after handling
             }
         }
-        if (!slInterval) {
-             scrollToBottom();
+        // --- NEW LOGIC END ---
+
+        const cmdFunc = commands[command.toLowerCase()];
+        if (cmdFunc) {
+            try {
+                await cmdFunc(args);
+            } catch (error) {
+                console.error(`Error executing command '${command}':`, error);
+                displayOutput(`Error during ${command}: ${error.message}`, 'error');
+            }
+        } else {
+            displayOutput(`bash: command not found: ${command}`, 'error');
         }
     }
+    if (!slInterval) {
+         scrollToBottom();
+    }
+}
 
     const commandHelp = {
         help: { description: "Show this help message." },
@@ -419,16 +435,49 @@ document.addEventListener('DOMContentLoaded', () => {
             displayOutput("Use 'man <command>' for more details.");
         },
         '?': () => commands.help(),
-        ls: (args) => {
-            if (!postsManifest || postsManifest.length === 0) { displayOutput("No posts found. (Is posts.json loaded?)"); return; }
-            let postsToDisplay = [...postsManifest];
-            let longFormat = args.includes('-lt');
-            if (longFormat) postsToDisplay.sort((a,b) => new Date(b.lastModified).getTime() - new Date(a.lastModified).getTime());
-            else postsToDisplay.sort((a,b) => a.name.localeCompare(b.name));
-            if (postsToDisplay.length === 0) { displayOutput("No posts available."); return; }
-            if (longFormat) postsToDisplay.forEach(p => displayOutput(`-rw-r--r-- 1 guest guest ${String(p.size||0).padStart(6,' ')} ${new Date(p.lastModified).toLocaleString('en-US',{month:'short',day:'2-digit',hour:'2-digit',minute:'2-digit',hour12:false})} ${p.name}`));
-            else postsToDisplay.forEach(p => displayOutput(p.name));
-        },
+        // Inside const commands = { ... }
+
+    // Original ls logic, now renamed to lsPosts
+    lsPosts: (args) => {
+        if (!postsManifest || postsManifest.length === 0) { displayOutput("No posts found. (Is posts.json loaded?)"); return; }
+        let postsToDisplay = [...postsManifest];
+        let longFormat = args.includes('-lt'); // You might want to handle '-lt' for posts later if needed
+        if (longFormat) postsToDisplay.sort((a,b) => new Date(b.lastModified).getTime() - new Date(a.lastModified).getTime());
+        else postsToDisplay.sort((a,b) => a.name.localeCompare(b.name));
+        if (postsToDisplay.length === 0) { displayOutput("No posts available."); return; }
+        // Add indentation for posts
+        postsToDisplay.forEach(p => displayOutput(`  ${p.name}`));
+    },
+
+    // New ls command for top-level directory listing
+    // Inside const commands = { ... }
+
+    // Make ls function asynchronous
+    ls: async (args) => { // <-- Make it async
+        if (args.length > 0) {
+            displayOutput(`ls: arguments not supported for root directory listing. Use 'ls posts' or 'ls repos'.`, 'error');
+            return;
+        }
+
+        displayOutput("posts/");
+        commands.lsPosts([]); // This still works as lsPosts is synchronous
+
+        displayOutput("repos/");
+        try {
+            const owner = 'robertovacirca'; // Your GitHub username
+            displayOutput("  Fetching public repositories..."); // Temporary message
+            const repos = await fetchGitHubApi(`https://api.github.com/users/${owner}/repos`);
+            if (repos.length === 0) {
+                displayOutput(`  No public repositories found for ${owner}.`);
+            } else {
+                repos.forEach(repos => {
+                    displayOutput(`  ${repos.name}/`); // Show as directory
+                });
+            }
+        } catch (error) {
+            displayOutput(`  Error fetching repositories: ${error.message}`, 'error');
+        }
+    },
         cat: async (args) => {
             if (args.length === 0) { displayOutput("Usage: cat <filename>", 'error'); return; }
             const filename = args[0];
@@ -628,7 +677,195 @@ document.addEventListener('DOMContentLoaded', () => {
         },
         sudo: (args) => { 
             if(args.join(' ')==='rm -rf /'){displayOutput("Nice try... But this is a client-side simulation! 😉",'error');}else{displayOutput("sudo: you are not the superuser here.",'error');}
-        }
+        },
+        // New lsrepos command
+        lsrepos: async (args) => {
+            const owner = 'robertovacirca'; // Replace with your GitHub username
+            if (args.length === 0) {
+                // ls repos: List all public repositories
+                try {
+                    displayOutput("Fetching public repositories...");
+                    const repos = await fetchGitHubApi(`https://api.github.com/users/${owner}/repos`);
+                    if (repos.length === 0) {
+                        displayOutput(`No public repositories found for ${owner}.`);
+                        return;
+                    }
+                    displayOutput(`repositories for ${owner}:`);
+                    repos.forEach(repos => {
+                        displayOutput(`  ${repos.name}`);
+                    });
+                    displayOutput("");
+                    displayOutput("Use 'ls repos/<repos_name>' to view contents, or 'cat repos/<repos_name>/README.md' to view a file.");
+                } catch (error) {
+                    displayOutput(`Error fetching repositories: ${error.message}`, 'error');
+                }
+            } else {
+                // ls repos/<repos_name>: List contents of a specific repository
+                const reposName = args[0];
+                const path = args.slice(1).join('/'); // If it's `ls repos/my-repos/src`
+                try {
+                    displayOutput(`Workspaceing contents of ${owner}/${reposName}/${path || ''}...`);
+                    const contents = await fetchGitHubApi(`https://api.github.com/repos/${owner}/${reposName}/contents/${path}`);
+
+                    if (!Array.isArray(contents)) {
+                        // This might happen if 'contents' is a single file object, not a directory listing
+                        displayOutput(`Error: ${path || 'repos root'} in ${reposName} is not a directory or could not be listed.`, 'error');
+                        return;
+                    }
+
+                    if (contents.length === 0) {
+                        displayOutput(`Directory ${path || 'root'} in ${reposName} is empty.`);
+                        return;
+                    }
+
+                    contents.forEach(item => {
+                        const typeIndicator = item.type === 'dir' ? '/' : '';
+                        displayOutput(`  ${item.name}${typeIndicator}`);
+                    });
+                } catch (error) {
+                    displayOutput(`Error listing contents of ${reposName}/${path}: ${error.message}`, 'error');
+                }
+            }
+        },
+
+        // New catrepos command
+        catrepos: async (reposName, filePath) => {
+            const owner = 'robertovacirca'; // Replace with your GitHub username
+            if (!reposName || !filePath) {
+                displayOutput("Usage: cat repos/<repos_name>/<file_path>", 'error');
+                return;
+            }
+
+            try {
+                displayOutput(`Workspaceing raw content of ${owner}/${reposName}/${filePath}...`);
+                const fileContent = await fetchRawGitHubContent(owner, reposName, filePath);
+
+                const tempRenderDiv = document.createElement('div');
+                const markdownContainer = document.createElement('div');
+                markdownContainer.className = 'markdown-content';
+
+                // Check if it's a Markdown file by extension
+                if (filePath.toLowerCase().endsWith('.md') || filePath.toLowerCase().endsWith('.markdown')) {
+                    markdownContainer.innerHTML = marked.parse(fileContent);
+                } else {
+                    // For other file types, display as pre-formatted text (like a code file)
+                    // You might want to add syntax highlighting based on file extension here
+                    const fileExtension = filePath.split('.').pop();
+                    const languageMap = {
+                        'js': 'javascript', 'py': 'python', 'sh': 'bash', 'c': 'c', 'cpp': 'cpp', 'lua': 'lua', 'ts': 'typescript'
+                    };
+                    const lang = languageMap[fileExtension] || 'plaintext'; // Default to plaintext
+
+                    // Create a pre-code structure for highlighting
+                    const pre = document.createElement('pre');
+                    const code = document.createElement('code');
+                    code.classList.add(`language-${lang}`);
+                    code.textContent = fileContent; // Use textContent to avoid HTML injection issues
+                    pre.appendChild(code);
+                    markdownContainer.appendChild(pre);
+                }
+                
+                tempRenderDiv.appendChild(markdownContainer);
+                tempRenderDiv.querySelectorAll('pre code').forEach(hljs.highlightElement);
+                addCopyButtonsToCodeBlocks(tempRenderDiv);
+                displayOutput(tempRenderDiv.innerHTML, 'rawhtml');
+
+            } catch (error) {
+                displayOutput(`cat: repos/${reposName}/${filePath}: ${error.message}`, 'error');
+            }
+        },
+
+        // You'll need to implement lessrepos, virepos, and nanorepos similarly
+        // For lessrepos, virepos, nanorepos, you would fetch the raw content
+        // using fetchRawGitHubContent and then pass it to the modal functions
+        // (less, vi, nano) with appropriate modifications for source naming.
+
+        lessrepos: async (reposName, filePath) => {
+            const owner = 'robertovacirca';
+            if (!reposName || !filePath) {
+                displayOutput("Usage: less repos/<repos_name>/<file_path>", 'error');
+                return;
+            }
+            try {
+                const fileContent = await fetchRawGitHubContent(owner, reposName, filePath);
+                const tempRenderDiv = document.createElement('div');
+                const markdownContainer = document.createElement('div');
+                markdownContainer.className = 'markdown-content';
+                if (filePath.toLowerCase().endsWith('.md') || filePath.toLowerCase().endsWith('.markdown')) {
+                    markdownContainer.innerHTML = marked.parse(fileContent);
+                } else {
+                    const fileExtension = filePath.split('.').pop();
+                    const languageMap = { 'js': 'javascript', 'py': 'python', 'sh': 'bash', 'c': 'c', 'cpp': 'cpp', 'lua': 'lua', 'ts': 'typescript' };
+                    const lang = languageMap[fileExtension] || 'plaintext';
+                    const pre = document.createElement('pre');
+                    const code = document.createElement('code');
+                    code.classList.add(`language-${lang}`);
+                    code.textContent = fileContent;
+                    pre.appendChild(code);
+                    markdownContainer.appendChild(pre);
+                }
+                tempRenderDiv.appendChild(markdownContainer);
+                tempRenderDiv.querySelectorAll('pre code').forEach(hljs.highlightElement);
+                addCopyButtonsToCodeBlocks(tempRenderDiv);
+
+                currentView = 'less';
+                modalContentWrapper.classList.remove('vi-mode', 'nano-mode');
+                modalNanoHeader.style.display = 'none';
+                modalContent.innerHTML = tempRenderDiv.innerHTML;
+                modalFooter.innerHTML = `${owner}/${reposName}/${filePath} (Press 'q' to quit, Arrows/PgUp/PgDn/Home/End/Space to scroll)`;
+                modalView.style.display = 'flex'; modalContent.scrollTop = 0; if(activeCommandInput) activeCommandInput.disabled = true;
+            } catch (error) { displayOutput(`less: repos/${reposName}/${filePath}: ${error.message}`, 'error'); if(activeCommandInput) activeCommandInput.disabled = false; }
+        },
+
+        virepos: async (reposName, filePath) => {
+            const owner = 'robertovacirca';
+            if (!reposName || !filePath) {
+                displayOutput("Usage: vi repos/<repos_name>/<file_path>", 'error');
+                return;
+            }
+            try {
+                const textContent = await fetchRawGitHubContent(owner, reposName, filePath);
+                const lines = textContent.split('\n');
+                let viFormattedContent = "";
+                lines.forEach((line, index) => { viFormattedContent += `<span class="line-number">${String(index + 1).padStart(3,' ')}</span>${escapeHtml(line)}\n`; });
+                currentView = 'vi';
+                modalContentWrapper.classList.add('vi-mode'); modalContentWrapper.classList.remove('nano-mode', 'less-mode');
+                modalNanoHeader.style.display = 'none';
+                modalContent.innerHTML = `<div style="white-space: pre;">${viFormattedContent}</div>`;
+                
+                modalFooter.innerHTML = `"${owner}/${reposName}/${filePath}" [readonly] (Press 'q' to quit)`;
+                const copyAllButton = document.createElement('button');
+                copyAllButton.textContent = 'Copy All'; copyAllButton.className = 'modal-copy-all-button';
+                copyAllButton.onclick = (e) => { e.stopPropagation(); navigator.clipboard.writeText(textContent).then(() => { copyAllButton.textContent = 'Copied!'; copyAllButton.classList.add('copied'); setTimeout(()=> { copyAllButton.textContent='Copy All'; copyAllButton.classList.remove('copied');}, 2000);}).catch(err => { console.error('Failed to copy (vi):', err); copyAllButton.textContent = 'Error!'; copyAllButton.classList.add('error'); setTimeout(()=> { copyAllButton.textContent='Copy All'; copyAllButton.classList.remove('error');}, 2000);}); };
+                modalFooter.appendChild(copyAllButton);
+
+                modalView.style.display = 'flex'; modalContent.scrollTop = 0; if(activeCommandInput) activeCommandInput.disabled = true;
+            } catch (error) { displayOutput(`vi: repos/${reposName}/${filePath}: ${error.message}`, 'error'); if(activeCommandInput) activeCommandInput.disabled = false; }
+        },
+
+        nanorepos: async (reposName, filePath) => {
+            const owner = 'robertovacirca';
+            if (!reposName || !filePath) {
+                displayOutput("Usage: nano repos/<repos_name>/<file_path>", 'error');
+                return;
+            }
+            try {
+                const textContent = await fetchRawGitHubContent(owner, reposName, filePath);
+                currentView = 'nano';
+                modalContentWrapper.classList.add('nano-mode'); modalContentWrapper.classList.remove('vi-mode', 'less-mode');
+                modalNanoHeader.textContent = `GNU nano (simulated)  File: ${owner}/${reposName}/${filePath}`;
+                modalNanoHeader.style.display = 'block';
+                modalContent.innerHTML = `<div style="white-space: pre;">${escapeHtml(textContent)}</div>`;
+
+                modalFooter.innerHTML = `^X Exit (Press 'q' to quit)`;
+                const copyAllButton = document.createElement('button');
+                copyAllButton.textContent = 'Copy All'; copyAllButton.className = 'modal-copy-all-button';
+                copyAllButton.onclick = (e) => { e.stopPropagation(); navigator.clipboard.writeText(textContent).then(() => { copyAllButton.textContent = 'Copied!'; copyAllButton.classList.add('copied'); setTimeout(()=> { copyAllButton.textContent='Copy All'; copyAllButton.classList.remove('copied');}, 2000);}).catch(err => { console.error('Failed to copy (nano):', err); copyAllButton.textContent = 'Error!'; copyAllButton.classList.add('error'); setTimeout(()=> { copyAllButton.textContent='Copy All'; copyAllButton.classList.remove('error');}, 2000);}); };
+                modalFooter.appendChild(copyAllButton);
+                
+                modalView.style.display = 'flex'; modalContent.scrollTop = 0; if(activeCommandInput) activeCommandInput.disabled = true;
+            } catch (error) { displayOutput(`nano: repos/${reposName}/${filePath}: ${error.message}`, 'error'); if(activeCommandInput) activeCommandInput.disabled = false; }
+        },
     };
     
     // Man, history implementations (already in full command object from prior response)
@@ -642,6 +879,42 @@ document.addEventListener('DOMContentLoaded', () => {
         const reversedHistory=[...commandHistory].reverse(); 
         reversedHistory.forEach((cmd,index)=>{displayOutput(`  ${String(index+1).padStart(3)}  ${cmd}`);});
     };
+
+
+// Helper function to fetch from GitHub API
+async function fetchGitHubApi(url) {
+    try {
+        const response = await fetch(url);
+        if (!response.ok) {
+            // Handle rate limiting or other API errors
+            if (response.status === 403 && response.headers.get('X-RateLimit-Remaining') === '0') {
+                const resetTime = new Date(parseInt(response.headers.get('X-RateLimit-Reset')) * 1000);
+                throw new Error(`GitHub API rate limit exceeded. Try again after ${resetTime.toLocaleTimeString()}`);
+            }
+            throw new Error(`GitHub API error! Status: ${response.status} ${response.statusText}`);
+        }
+        return await response.json();
+    } catch (error) {
+        console.error("Error fetching from GitHub API:", error);
+        throw error;
+    }
+}
+
+// Helper to get raw file content
+async function fetchRawGitHubContent(owner, repos, path, branch = 'main') {
+    try {
+        const url = `https://raw.githubusercontent.com/${owner}/${repos}/${branch}/${path}`;
+        const response = await fetch(url);
+        if (!response.ok) {
+            throw new Error(`Could not fetch raw content for ${path}. Status: ${response.status} ${response.statusText}`);
+        }
+        return await response.text();
+    } catch (error) {
+        console.error("Error fetching raw GitHub content:", error);
+        throw error;
+    }
+}
+
 
 
     function showTerminalFromModal() {

@@ -1,6 +1,8 @@
+---
+
 # Hello World!
 
-This is my test post on this terminal-style blog. Welcome!
+This is my first post on this terminal-style blog. Welcome!
 
 ## Features
 * Markdown rendering via `marked.js`
@@ -45,5 +47,7 @@ Feel free to explore!
 
 - Pin points
 - other points
----
+
 [A link to google](https://google.com)
+
+---
