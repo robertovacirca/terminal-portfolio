@@ -895,14 +895,3 @@ describe('Terminal App Core Features', () => {
     });
   });
 });
-
-// Note: To test fetchGitHubApi and fetchRawGitHubContent directly,
-// they would need to be exported from app.js and imported here.
-// Example (if they were exported):
-// describe('API Fetch Helpers', () => {
-//   test('fetchGitHubApi handles 404', async () => {
-//     fetch.mockResolvedValueOnce({ ok: false, status: 404, statusText: 'Not Found', url: 'http://test.com/api/item' });
-//     await expect(fetchGitHubApi('http://test.com/api/item'))
-//       .rejects.toThrow('Error: Repository or path not found: item');
-//   });
-// });
