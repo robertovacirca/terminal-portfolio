@@ -19,6 +19,14 @@ document.addEventListener('DOMContentLoaded', () => {
     let userRepoNamesCache = null; // Cache for GitHub repository names
     let repoContentsCache = {};   // Cache for contents of repository paths
 
+    // TUI specific variables
+    let tuiSidebarItems = [];
+    let currentTuiFocusIndex = -1;
+    let isTuiSidebarPopulated = false;
+    let tuiStatusBarElement = null;
+    let tuiSidebarElement = null; // Will hold reference to #tui-sidebar
+    let tuiMainOutputElement = null; // Will hold reference to #tui-main-output
+
     const fortunes = [
         "Code is like humor. When you have to explain it, it’s bad. – Cory House",
         "The best way to predict the future is to invent it. – Alan Kay",
@@ -123,7 +131,8 @@ document.addEventListener('DOMContentLoaded', () => {
         exit: { description: "Reset the terminal session." },
         sl: { description: "Steam Locomotive. A bit of fun!", usage: "sl", details: "Displays a delightful steam locomotive animation." },
         cowsay: { description: "Display an ASCII cow saying a message.", usage: "cowsay <message>", details: "The cow will say whatever message you provide." },
-        sudo: { description: "Execute a command as another user (simulated)." }
+        sudo: { description: "Execute a command as another user (simulated)." },
+        toggletui: { description: "Toggle between CLI and TUI mode.", usage: "toggletui" }
     };
 
     const commands = {
@@ -493,6 +502,47 @@ document.addEventListener('DOMContentLoaded', () => {
         },
         sudo: (args) => { 
             if(args.join(' ')==='rm -rf /'){displayOutput("Nice try... But this is a client-side simulation! 😉",'error');}else{displayOutput("sudo: you are not the superuser here.",'error');}
+        },
+        toggletui: () => {
+            const tuiModeContainer = document.getElementById('tui-mode-container');
+            if (!terminal || !tuiModeContainer) {
+                displayOutput("Error: UI elements not found for TUI toggle.", 'error');
+                return;
+            }
+
+            if (terminal.style.display !== 'none') {
+                // Switch to TUI mode
+                terminal.style.display = 'none';
+                tuiModeContainer.style.display = 'grid'; // Matches CSS
+                currentView = 'tui'; // Mark that TUI is active
+
+                // Ensure TUI elements are known
+                if (!tuiSidebarElement) tuiSidebarElement = document.getElementById('tui-sidebar');
+                if (!tuiMainOutputElement) tuiMainOutputElement = document.getElementById('tui-main-output');
+                if (!tuiStatusBarElement) tuiStatusBarElement = document.getElementById('tui-status-bar');
+                
+                if (!isTuiSidebarPopulated) {
+                    populateTuiSidebar();
+                }
+
+                if (tuiSidebarItems.length > 0) {
+                    // currentTuiFocusIndex will be set by the focus event in populateTuiSidebar
+                    // or by keyboard navigation. For initial population, focus the first item.
+                    tuiSidebarItems[0].focus(); 
+                } else {
+                    updateTuiStatusBar("Sidebar is empty or not populated.");
+                }
+                // displayOutput("Switched to TUI mode. Type 'toggletui' to switch back.", "success"); // Status bar handles this
+            } else {
+                // Switch back to CLI mode
+                tuiModeContainer.style.display = 'none';
+                terminal.style.display = ''; // Revert to default (flex)
+                currentView = null; // Mark that CLI is active (or no special view)
+                if (activeCommandInput) {
+                    attemptFocus(activeCommandInput);
+                }
+                displayOutput("Switched back to CLI mode.", "success");
+            }
         },
         // New lsrepos command
         lsrepos: async (args) => {
@@ -899,6 +949,550 @@ document.addEventListener('DOMContentLoaded', () => {
     function escapeHtml(str) { 
         return String(str).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#039;");
     }
+
+    function updateTuiStatusBar(message) {
+        if (!tuiStatusBarElement) { // Assign if not already assigned
+            tuiStatusBarElement = document.getElementById('tui-status-bar');
+        }
+        if (tuiStatusBarElement) {
+            tuiStatusBarElement.textContent = message;
+        } else {
+            console.error("TUI Status Bar element not found for message:", message);
+        }
+    }
+
+    function populateTuiSidebar() {
+        if (isTuiSidebarPopulated) return;
+
+        if (!tuiSidebarElement) tuiSidebarElement = document.getElementById('tui-sidebar');
+        if (!tuiMainOutputElement) tuiMainOutputElement = document.getElementById('tui-main-output');
+        // Ensure tuiStatusBarElement is assigned (it's used in updateTuiStatusBar)
+        if (!tuiStatusBarElement) tuiStatusBarElement = document.getElementById('tui-status-bar');
+
+
+        if (!tuiSidebarElement) {
+            console.error("TUI Sidebar element not found!");
+            return;
+        }
+
+        tuiSidebarElement.innerHTML = ''; // Clear any existing items
+        tuiSidebarItems = []; // Reset the array
+
+        Object.keys(commandHelp).sort().forEach((command) => {
+            const item = document.createElement('div');
+            item.className = 'tui-sidebar-item';
+            item.textContent = command;
+            item.tabIndex = 0; // Make it focusable
+
+            item.addEventListener('click', () => {
+                item.focus(); // Focus will trigger the 'focus' listener below
+            });
+            
+            item.addEventListener('focus', () => {
+                // Update currentTuiFocusIndex when an item receives focus
+                currentTuiFocusIndex = tuiSidebarItems.indexOf(item);
+                updateTuiStatusBar(`Selected: ${command} - ${commandHelp[command].description}`);
+            });
+            
+            item.addEventListener('keydown', (e) => { 
+                if (e.key === 'Enter') {
+                    e.preventDefault();
+                    if (!tuiMainOutputElement) tuiMainOutputElement = document.getElementById('tui-main-output'); // Ensure it's assigned
+                    
+                    if (tuiMainOutputElement) {
+                        tuiMainOutputElement.textContent += `\n> ${command}\n`;
+                        // Simulate command execution for now
+                        tuiMainOutputElement.textContent += `Executed: ${command}. (Output would appear here)\n`;
+                        tuiMainOutputElement.scrollTop = tuiMainOutputElement.scrollHeight; // Scroll to bottom
+                    }
+                    updateTuiStatusBar(`Executed: ${command}`);
+                }
+            });
+
+            tuiSidebarItems.push(item);
+            tuiSidebarElement.appendChild(item);
+        });
+        isTuiSidebarPopulated = true;
+    }
+    
+    async function init() {
+        outputContainer.innerHTML = '';
+        await fetchPostsManifest();
+
+        displayOutput("Welcome to Terminal Blog!");
+        displayOutput("Type 'help' to see available commands or '?' for a short list.");
+        displayOutput("");
+
+        createNewInputLine();
+
+        if (!terminal.dataset.listenersAttached) {
+            document.addEventListener('keydown', handleGlobalKeyPress);
+            outputContainer.addEventListener('click', (event) => {
+                if (currentView) return;
+                if (event.target.tagName === 'BUTTON' || event.target.closest('button')) {
+                    return;
+                }
+                if (activeCommandInput &&
+                    currentInputLineDiv && !currentInputLineDiv.contains(event.target)) {
+                    const selection = window.getSelection();
+                     if (!(selection.toString().length > 0 && outputContainer.contains(selection.anchorNode))) {
+                        attemptFocus(activeCommandInput);
+                    }
+                } else if (activeCommandInput && event.target === outputContainer) {
+                    attemptFocus(activeCommandInput);
+                }
+            });
+            terminal.dataset.listenersAttached = 'true';
+        }
+    }
+
+    async function fetchPostsManifest() {
+        try {
+            const response = await fetch('public/posts/posts.json');
+            if (!response.ok) { throw new Error(`HTTP error! ${response.status} ${response.statusText}`); }
+            postsManifest = await response.json();
+        } catch (error) {
+            console.error("Failed to load posts.json:", error);
+            const errDiv = document.createElement('div');
+            errDiv.className = 'command-output-item error';
+            errDiv.textContent = `Error: Could not load posts manifest. ${error.message}`;
+            if (outputContainer) {
+                if (currentInputLineDiv && outputContainer.contains(currentInputLineDiv)) {
+                     outputContainer.insertBefore(errDiv, currentInputLineDiv);
+                } else {
+                    outputContainer.appendChild(errDiv);
+                }
+            } else {
+                console.error("outputContainer not ready for fetchPostsManifest error.");
+            }
+            postsManifest = [];
+        }
+    }
+
+    function displayOutput(text, type = 'output') {
+        if (text === undefined || text === null) return;
+        const div = document.createElement('div');
+
+        if (type !== 'sl-animation-frame' && type !== 'cowsay-output') {
+            div.classList.add('command-output-item');
+        }
+
+        if (type === 'error') {
+            div.classList.add('error'); div.textContent = String(text);
+        } else if (type === 'success') {
+            div.classList.add('success'); div.textContent = String(text);
+        } else if (type === 'rawhtml') {
+            div.innerHTML = String(text);
+        } else if (type === 'sl-animation-frame') {
+            div.className = 'sl-animation-frame';
+            div.textContent = String(text);
+        } else if (type === 'cowsay-output') {
+            div.className = 'cowsay-output command-output-item';
+            div.textContent = String(text);
+        }
+         else {
+            div.textContent = String(text);
+        }
+
+        if (currentInputLineDiv && outputContainer.contains(currentInputLineDiv)) {
+            outputContainer.insertBefore(div, currentInputLineDiv);
+        } else {
+            outputContainer.appendChild(div);
+        }
+    }
+
+    function addCopyButtonsToCodeBlocks(containerElement) {
+        containerElement.querySelectorAll('pre').forEach(preBlock => {
+            console.log('Found <pre> block:', preBlock);
+    
+            let wrapper = preBlock.parentElement;
+    
+            // Check for wrapper
+            if (!wrapper || !wrapper.classList.contains('code-block-wrapper')) {
+                console.log('No wrapper found, creating one.');
+                const contentParent = preBlock.closest('.markdown-content, .modal-content');
+                if (contentParent) {
+                    wrapper = document.createElement('div');
+                    wrapper.className = 'code-block-wrapper';
+                    preBlock.parentNode.insertBefore(wrapper, preBlock);
+                    wrapper.appendChild(preBlock);
+                    console.log('Wrapper created and <pre> moved inside.');
+                } else {
+                    wrapper = preBlock;
+                    preBlock.style.position = 'relative';
+                    console.log('Using <pre> as wrapper (no content parent found).');
+                }
+            }
+    
+            // Add copy button if it doesn't already exist
+            if (!wrapper.querySelector('.code-copy-button')) {
+                const button = document.createElement('button');
+                button.className = 'code-copy-button';
+                button.textContent = 'Copy';
+                wrapper.appendChild(button);
+                console.log('Copy button created and appended.');
+            } else {
+                console.log('Copy button already exists, skipping.');
+            }
+        });
+    }
+    
+    
+
+    async function handleCommandInputKeydown(e) {
+        if (currentView || !activeCommandInput) return;
+
+        if (slInterval && e.key.toLowerCase() !== 'c' && !e.ctrlKey) {
+             e.preventDefault();
+             return;
+        }
+
+        if (e.ctrlKey) {
+            let preventDefault = true;
+            switch (e.key.toLowerCase()) {
+                case 'a': activeCommandInput.setSelectionRange(0, 0); break;
+                case 'e': activeCommandInput.setSelectionRange(activeCommandInput.value.length, activeCommandInput.value.length); break;
+                case 'u': activeCommandInput.value = ''; break;
+                case 'l': commands.clear(); scrollToBottom(); break;
+                case 'c':
+                    if (slInterval) {
+                        clearInterval(slInterval);
+                        slInterval = null;
+                        const slFrameDiv = outputContainer.querySelector('.sl-animation-frame');
+                        if (slFrameDiv) {
+                             slFrameDiv.textContent += "\n*** SL Interrupted ***";
+                        } else {
+                            displayOutput("*** SL Interrupted ***");
+                        }
+                         // Remove the input line that invoked SL, then create new.
+                        if (currentInputLineDiv && currentInputLineDiv.parentNode === outputContainer) {
+                            outputContainer.removeChild(currentInputLineDiv);
+                        }
+                        activeCommandInput = null; // Ensure it's cleared
+                        currentInputLineDiv = null;
+                        createNewInputLine();
+                        preventDefault = true;
+                    } else {
+                        const currentCmdTextForCtrlC = activeCommandInput.value;
+                        if (currentInputLineDiv && activeCommandInput) {
+                            currentInputLineDiv.removeChild(activeCommandInput);
+                            currentInputLineDiv.appendChild(document.createTextNode(currentCmdTextForCtrlC + "^C"));
+                            activeCommandInput.removeEventListener('keydown', handleCommandInputKeydown);
+                            activeCommandInput = null;
+                            currentInputLineDiv = null;
+                        }
+                        createNewInputLine();
+                    }
+                    break;
+                default: preventDefault = false;
+            }
+            if (preventDefault) e.preventDefault();
+            if (['a','e','u','l','c'].includes(e.key.toLowerCase())) return;
+        }
+
+        if (e.key === 'Enter') {
+            e.preventDefault();
+            if (slInterval) return;
+
+            const commandText = activeCommandInput.value.trim();
+
+            if (currentInputLineDiv && activeCommandInput) {
+                 currentInputLineDiv.removeChild(activeCommandInput);
+                 currentInputLineDiv.appendChild(document.createTextNode(commandText));
+                 activeCommandInput.removeEventListener('keydown', handleCommandInputKeydown);
+                 activeCommandInput = null;
+                 currentInputLineDiv = null;
+            }
+
+            if (commandText) {
+                commandHistory.unshift(commandText);
+                historyIndex = -1;
+            }
+
+            await processCommand(commandText);
+
+            if (!slInterval) {
+                createNewInputLine();
+            }
+            return;
+        }
+        else if (e.key === 'ArrowUp') {
+            e.preventDefault();
+            if (commandHistory.length > 0 && activeCommandInput) {
+                historyIndex = Math.min(historyIndex + 1, commandHistory.length - 1);
+                activeCommandInput.value = commandHistory[historyIndex];
+                activeCommandInput.setSelectionRange(activeCommandInput.value.length, activeCommandInput.value.length);
+            }
+        } else if (e.key === 'ArrowDown') {
+            e.preventDefault();
+            if (activeCommandInput) {
+                if (historyIndex > 0) {
+                    historyIndex--;
+                    activeCommandInput.value = commandHistory[historyIndex];
+                    activeCommandInput.setSelectionRange(activeCommandInput.value.length, activeCommandInput.value.length);
+                } else {
+                    historyIndex = -1;
+                    activeCommandInput.value = '';
+                }
+            }
+        } else if (e.key === 'Tab') {
+            e.preventDefault();
+            if (!activeCommandInput) return;
+
+            const currentInputValue = activeCommandInput.value;
+            const parts = currentInputValue.split(' ');
+            // const currentWord = parts.length > 0 ? parts[parts.length - 1].toLowerCase() : ""; // Not strictly needed with currentArgText
+            const atStartOfNewWord = currentInputValue.endsWith(" ") || parts[parts.length -1] === ""; // If true, currentArgText will be ""
+            // const wordToComplete = atStartOfNewWord ? "" : parts[parts.length - 1]; // Replaced by currentArgText (non-lowercased)
+
+            let suggestions = [];
+            const commandName = parts[0].toLowerCase(); // command is a reserved keyword in some contexts
+            const baseDirs = ["posts/", "repo/"];
+
+            // Scenario 1: Completing the command itself
+            if (parts.length === 1 && !currentInputValue.endsWith(" ")) {
+                const commandPartToComplete = parts[0]; // wordToComplete equivalent for command
+                suggestions = Object.keys(commands).filter(cmd => cmd.startsWith(commandPartToComplete));
+            }
+            // Scenario 2: Completing arguments for a command
+            else if (parts.length >= 1 && commandName) { // Command name is present or fully typed
+                const argIndex = currentInputValue.endsWith(" ") ? parts.length : parts.length - 1; // Keep only one
+                const currentArgText = currentInputValue.endsWith(" ") ? "" : parts[parts.length - 1];
+
+                // Ensure commandName is valid before proceeding with argument completion
+                if (commandName && commands[commandName]) {
+                    if (commandName === 'ls' || ['cat', 'less', 'vi', 'nano'].includes(commandName)) {
+                        if (argIndex === 1) { // Completing the first argument (path)
+                            if (currentArgText.startsWith("posts/")) {
+                                const filePrefix = currentArgText.substring("posts/".length);
+                            suggestions = postsManifest
+                                .filter(post => post.name.toLowerCase().startsWith(filePrefix.toLowerCase()))
+                                .map(p => "posts/" + p.name);
+                        } else if (currentArgText.startsWith("repo/")) {
+                            const repoPathPart = currentArgText.substring("repo/".length);
+                            const repoPathSegments = repoPathPart.split('/');
+                            
+                            if (repoPathSegments.length === 1) { // Completing repo name: "repo/my-p" or "repo/"
+                                const partialRepoName = repoPathSegments[0];
+                                if (userRepoNamesCache === null) {
+                                    showLoadingSuggestions(outputContainer, currentInputLineDiv);
+                                    try {
+                                        const repos = await fetchGitHubApi(`https://api.github.com/users/robertovacirca/repos`);
+                                        userRepoNamesCache = repos.map(r => r.name);
+                                    } catch (err) {
+                                        displayOutput(`Error fetching repositories: ${err.message}`, 'error');
+                                        userRepoNamesCache = []; // Avoid retrying on every tab for a failed fetch
+                                    } finally {
+                                        hideLoadingSuggestions();
+                                    }
+                                }
+                                suggestions = (userRepoNamesCache || [])
+                                    .filter(name => name.startsWith(partialRepoName))
+                                    .map(name => `repo/${name}/`);
+                            } else { // Completing path inside a repo: "repo/my-portfolio/sr" or "repo/my-portfolio/src/"
+                                const repoName = repoPathSegments[0];
+                                const pathPrefixSegments = repoPathSegments.slice(1, -1); // Path up to the part being completed
+                                const itemToComplete = repoPathSegments[repoPathSegments.length - 1];
+                                const cacheKey = `${repoName}/${pathPrefixSegments.join('/')}`;
+                                const fullPathToFetch = `repos/robertovacirca/${repoName}/contents/${pathPrefixSegments.join('/')}`;
+
+                                if (!repoContentsCache[cacheKey]) {
+                                    showLoadingSuggestions(outputContainer, currentInputLineDiv);
+                                    try {
+                                        const contents = await fetchGitHubApi(`https://api.github.com/repos/robertovacirca/${repoName}/contents/${pathPrefixSegments.join('/')}`);
+                                        if (Array.isArray(contents)) {
+                                            repoContentsCache[cacheKey] = contents;
+                                        } else {
+                                            // If the API returns a single file object for a path that was expected to be a dir,
+                                            // or any other non-array response that isn't an error.
+                                            console.warn(`Tab completion: Expected array for ${cacheKey}, received:`, contents);
+                                            repoContentsCache[cacheKey] = []; // Cache empty array
+                                        }
+                                    } catch (err) {
+                                        displayOutput(`Error fetching suggestions for ${repoName}/${pathPrefixSegments.join('/')}: ${err.message}`, 'error');
+                                        repoContentsCache[cacheKey] = []; // Cache empty array on error
+                                    } finally {
+                                        hideLoadingSuggestions();
+                                    }
+                                }
+                                // Ensure that we only try to filter if repoContentsCache[cacheKey] is actually an array.
+                                // The `|| []` handles cases where cacheKey might not exist yet if fetch failed early or is in progress.
+                                const cachedContent = repoContentsCache[cacheKey];
+                                suggestions = (Array.isArray(cachedContent) ? cachedContent : [])
+                                    .filter(item => item.name.startsWith(itemToComplete))
+                                    .map(item => `repo/${repoName}/${pathPrefixSegments.join('/') ? pathPrefixSegments.join('/') + '/' : ''}${item.name}${item.type === 'dir' ? '/' : ''}`);
+                            }
+                        } else { // Suggest "posts/" or "repo/"
+                            suggestions = baseDirs.filter(dir => dir.startsWith(currentArgText));
+                        }
+                    }
+                } else if (commandName === 'man') {
+                    if (argIndex === 1) { // Completing the command name argument for 'man'
+                         suggestions = Object.keys(commandHelp).filter(cmd => cmd.startsWith(currentArgText) && cmd !== '?');
+                    }
+                }
+                // Add other command-specific argument completion logic here if needed
+            }
+
+            // Ensure suggestions are unique (e.g. if multiple logic paths could add the same suggestion)
+            if (suggestions.length > 0) {
+                suggestions = [...new Set(suggestions)];
+            }
+
+            if (suggestions.length === 1) {
+                const suggestion = suggestions[0];
+                parts[parts.length - 1] = suggestion; // Replace current word with suggestion
+
+                let finalValue;
+                if (suggestion.endsWith('/')) {
+                    // For directory-like suggestions (e.g., "posts/"), complete without adding an extra space immediately after.
+                    finalValue = parts.join(' ');
+                } else {
+                    // For commands or filenames, add a space after completion.
+                    finalValue = parts.join(' ') + ' ';
+                }
+                activeCommandInput.value = finalValue;
+                activeCommandInput.setSelectionRange(activeCommandInput.value.length, activeCommandInput.value.length);
+            } else if (suggestions.length > 1) {
+                displayOutput(`Suggestions: ${suggestions.join('  ')}`);
+                scrollToBottom();
+            }
+        }
+    }
+
+async function processCommand(commandText) {
+    const parts = commandText.split(/\s+/).filter(s => s.length > 0);
+    const command = parts[0];
+    const args = parts.slice(1);
+
+    if (!command && commandText === "") {
+        // Empty enter press
+    } else if (command) {
+        // Special routing for cat, less, vi, nano for repo paths
+        if (['cat', 'less', 'vi', 'nano'].includes(command.toLowerCase()) && 
+            args[0] && 
+            (args[0].toLowerCase().startsWith('repo/') || args[0].toLowerCase().startsWith('repos/'))) {
+            
+            const fullPathArg = args[0]; 
+            let pathWithoutPrefix = '';
+            
+            if (fullPathArg.toLowerCase().startsWith('repo/')) {
+                pathWithoutPrefix = fullPathArg.substring('repo/'.length);
+            } else if (fullPathArg.toLowerCase().startsWith('repos/')) {
+                pathWithoutPrefix = fullPathArg.substring('repos/'.length);
+            }
+
+            const pathParts = pathWithoutPrefix.split('/');
+            
+            // Ensure repoName is not empty (e.g. from "cat repo/")
+            if (pathParts.length >= 1 && pathParts[0]) { 
+                const repoName = pathParts[0];
+                const fileOrDirPath = pathParts.slice(1).join('/'); 
+
+                if (!fileOrDirPath) { 
+                    displayOutput(`${command}: '${fullPathArg}' is a directory. Please specify a file path.`, 'error');
+                    // No further processing for this command if only a directory is given to cat/less etc.
+                    // createNewInputLine(); // Not needed here as processCommand finishes and calls it
+                    return; 
+                }
+                
+                const targetReposCommandName = command.toLowerCase() + 'repos';
+                if (commands[targetReposCommandName]) {
+                    await commands[targetReposCommandName](repoName, fileOrDirPath);
+                } else {
+                    // This case should ideally not be hit if all ...repos commands are defined
+                    console.error(`Internal error: Command ${targetReposCommandName} not found, but routing logic directed to it.`);
+                    displayOutput(`Error: Command ${command} does not support repository operations for ${targetReposCommandName}.`, 'error');
+                }
+                return; // Exit after handling the repo-specific command
+            } else { 
+                 // Case where pathWithoutPrefix was empty or only contained slashes, making repoName empty.
+                 // e.g., user typed "cat repo/" or "cat repos//"
+                 displayOutput(`${command}: Invalid repository path specified: '${fullPathArg}'`, 'error');
+                 // createNewInputLine(); // Not needed here
+                 return;
+            }
+        }
+
+        // Default command handling (includes local posts for cat, etc.)
+        const cmdFunc = commands[command.toLowerCase()];
+        if (cmdFunc) {
+            try {
+                await cmdFunc(args);
+            } catch (error) {
+                console.error(`Error executing command '${command}':`, error);
+                displayOutput(`Error during ${command}: ${error.message}`, 'error');
+            }
+        } else {
+            displayOutput(`bash: command not found: ${command}`, 'error');
+            const commandNames = Object.keys(commands);
+            const threshold = 2; 
+            let suggestions = [];
+
+            for (const validCommand of commandNames) {
+                // Do not suggest '?' for commands longer than 1 char, unless the command itself is '?'
+                if (validCommand === "?" && command !== "?" && command.length > 1) continue; 
+                
+                const distance = levenshtein(command, validCommand);
+                if (distance <= threshold) {
+                    suggestions.push({ command: validCommand, distance: distance });
+                }
+            }
+
+            // Sort by distance, then alphabetically for commands with the same distance
+            suggestions.sort((a, b) => {
+                if (a.distance !== b.distance) {
+                    return a.distance - b.distance;
+                }
+                return a.command.localeCompare(b.command); 
+            });
+
+            if (suggestions.length > 0) {
+                let suggestionMsg = `Did you mean: ${suggestions[0].command} ?`;
+                // If a second suggestion exists AND it has the same minimal distance
+                // (already sorted alphabetically, so suggestions[0] and suggestions[1] are the chosen ones for ties)
+                if (suggestions.length > 1 && suggestions[1].distance === suggestions[0].distance) {
+                    suggestionMsg = `Did you mean: ${suggestions[0].command} or ${suggestions[1].command} ?`;
+                }
+                displayOutput(suggestionMsg);
+            }
+        }
+    }
+    if (!slInterval) {
+         scrollToBottom();
+    }
+}
+
+// Levenshtein distance function
+function levenshtein(s1, s2) {
+    if (s1.length < s2.length) { return levenshtein(s2, s1); }
+    if (s2.length === 0) { return s1.length; }
+    let previousRow = Array.from({ length: s2.length + 1 }, (_, i) => i);
+    for (let i = 0; i < s1.length; i++) {
+        let currentRow = [i + 1];
+        for (let j = 0; j < s2.length; j++) {
+            let insertions = previousRow[j + 1] + 1;
+            let deletions = currentRow[j] + 1;
+            let substitutions = previousRow[j] + (s1[i] !== s2[j]);
+            currentRow.push(Math.min(insertions, deletions, substitutions));
+        }
+        previousRow = currentRow;
+    }
+    return previousRow[previousRow.length - 1];
+}
+    
+    // Man, history implementations (already in full command object from prior response)
+    commands.man = (args) => {
+        if(args.length===0){displayOutput("What manual page do you want?",'error');return;}
+        const cmdKey=args[0].toLowerCase();const helpData=commandHelp[cmdKey];
+        if(helpData){let manOutput=`<div class="man-page"><strong>NAME</strong>\n    ${cmdKey} - ${helpData.description}\n\n`;if(helpData.usage)manOutput+=`<strong>SYNOPSIS</strong>\n    ${helpData.usage}\n\n`;if(helpData.details)manOutput+=`<strong>DESCRIPTION</strong>\n    ${helpData.details.replace(/\n/g,'\n    ')}\n`;manOutput+=`</div>`;displayOutput(manOutput,'rawhtml');}else{displayOutput(`No manual entry for ${cmdKey}`,'error');}
+    };
+    commands.history = () => {
+        if(commandHistory.length===0){displayOutput("No commands in history.");return;}
+        const reversedHistory=[...commandHistory].reverse(); 
+        reversedHistory.forEach((cmd,index)=>{displayOutput(`  ${String(index+1).padStart(3)}  ${cmd}`);});
+    };
+}
     
     async function init() {
         outputContainer.innerHTML = '';
