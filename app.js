@@ -130,6 +130,8 @@ document.addEventListener('DOMContentLoaded', () => {
         scrollToBottom();
     }
 
+    
+
     async function init() {
         outputContainer.innerHTML = '';
         await fetchPostsManifest();
@@ -371,8 +373,7 @@ document.addEventListener('DOMContentLoaded', () => {
             }
             // Scenario 2: Completing arguments for a command
             else if (parts.length >= 1 && commandName) { // Command name is present or fully typed
-                const argIndex = currentInputValue.endsWith(" ") ? parts.length : parts.length - 1;
-                const argIndex = currentInputValue.endsWith(" ") ? parts.length : parts.length - 1;
+                const argIndex = currentInputValue.endsWith(" ") ? parts.length : parts.length - 1; // Keep only one
                 const currentArgText = currentInputValue.endsWith(" ") ? "" : parts[parts.length - 1];
 
                 // Ensure commandName is valid before proceeding with argument completion
@@ -1358,27 +1359,10 @@ async function fetchRawGitHubContent(owner, repoName, path, branch = 'main') {
         scrollToBottom(); 
     }
 
-    function handleGlobalKeyPress(e) { 
-        if (!currentView) return; 
-        const key = e.key.toLowerCase();
-
-        if (key === 'q' && ['less', 'vi', 'nano'].includes(currentView)) {
-            e.preventDefault(); showTerminalFromModal();
-        } else if (currentView === 'less') { 
-            const scrollAmount = 40; 
-            const pageScrollAmount = modalContent.clientHeight * 0.85;
-            if (key === 'arrowdown') { e.preventDefault(); modalContent.scrollTop += scrollAmount; }
-            else if (key === 'arrowup') { e.preventDefault(); modalContent.scrollTop -= scrollAmount; }
-            else if (key === 'pagedown' || key === ' ') { e.preventDefault(); modalContent.scrollTop += pageScrollAmount; }
-            else if (key === 'pageup' || key === 'b') { e.preventDefault(); modalContent.scrollTop -= pageScrollAmount; }
-            else if (key === 'home' || (key === 'g' && !e.shiftKey) ) { e.preventDefault(); modalContent.scrollTop = 0; } 
-            else if (key === 'end' || (key === 'g' && e.shiftKey) ) { e.preventDefault(); modalContent.scrollTop = modalContent.scrollHeight; }
-        }
-    }
-
     function escapeHtml(str) { 
         return String(str).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#039;");
     }
+}
     
     init();
 });
