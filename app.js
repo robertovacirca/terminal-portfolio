@@ -31,572 +31,79 @@ document.addEventListener('DOMContentLoaded', () => {
     ];
 
     hljs.configure({ ignoreUnescapedHTML: true });
-
-    let loadingMessageDiv = null;
-    function showLoadingSuggestions(outputContainerRef, currentInputLineDivRef) {
-        if (loadingMessageDiv) return; 
-        loadingMessageDiv = document.createElement('div');
-        loadingMessageDiv.className = 'command-output-item loader-message';
-        loadingMessageDiv.textContent = 'Fetching suggestions...';
-        if (currentInputLineDivRef && outputContainerRef.contains(currentInputLineDivRef)) {
-            outputContainerRef.insertBefore(loadingMessageDiv, currentInputLineDivRef);
-        } else {
-            outputContainerRef.appendChild(loadingMessageDiv);
-        }
-        scrollToBottom(); // Ensure it's visible
-    }
-
-    function hideLoadingSuggestions() {
-        if (loadingMessageDiv && loadingMessageDiv.parentNode) {
-            loadingMessageDiv.parentNode.removeChild(loadingMessageDiv);
-        }
-        loadingMessageDiv = null;
-    }
-
-    function attemptFocus(element) {
-        if (!element) return;
-    
+    // Helper function to fetch from GitHub API
+    async function fetchGitHubApi(url) {
+        let response;
         try {
-            if (document.hasFocus()) {
-                element.focus({ preventScroll: true });
-            } else {
-                // Defer focus until the document gains focus again
-                const handleFocus = () => {
-                    element.focus({ preventScroll: true });
-                    window.removeEventListener('focus', handleFocus);
-                };
-                window.addEventListener('focus', handleFocus);
-            }
-        } catch (e) {
-            console.warn('attemptFocus failed:', e);
+            response = await fetch(url);
+        } catch (networkError) {
+            // Catches TypeError: Failed to fetch
+            console.error("Network error fetching from GitHub API:", networkError);
+            throw new Error(`Network request failed. Please check your internet connection.`);
         }
-    }
-    
-    document.addEventListener('click', e => {
-        if (e.target.classList.contains('code-copy-button')) {
-            console.log('Delegated click handler triggered!', e.target);
-            const wrapper = e.target.closest('.code-block-wrapper');
-            const code = wrapper?.querySelector('pre code');
-    
-            if (code) {
-                const text = code.innerText;
-                console.log('Copying text:', text);
-                navigator.clipboard.writeText(text).then(() => {
-                    console.log('Text copied successfully.');
-                    e.target.textContent = 'Copied!';
-                    setTimeout(() => e.target.textContent = 'Copy', 2000);
-                }).catch(err => {
-                    console.error('Clipboard write failed:', err);
-                    e.target.textContent = 'Error';
-                });
+
+        if (!response.ok) {
+            const status = response.status;
+            const statusText = response.statusText;
+            const requestedUrl = response.url; // Get the actual URL requested
+
+            if (status === 403 && response.headers.get('X-RateLimit-Remaining') === '0') {
+                const resetTimeEpoch = parseInt(response.headers.get('X-RateLimit-Reset')) * 1000;
+                const resetTime = new Date(resetTimeEpoch).toLocaleTimeString();
+                console.warn(`GitHub API rate limit exceeded for URL: ${requestedUrl}`);
+                throw new Error(`GitHub API rate limit exceeded. Try again after ${resetTime}.`);
+            } else if (status === 404) {
+                console.warn(`GitHub API 404 Not Found for URL: ${requestedUrl}`);
+                // Extract a more user-friendly path if possible, otherwise show URL
+                const pathPart = requestedUrl.includes('/repos/') ? requestedUrl.split('/repos/')[1] : requestedUrl;
+                throw new Error(`Error: Repository or path not found: ${pathPart}`);
             } else {
-                console.warn('No <code> element found to copy.');
-                e.target.textContent = 'Error';
+                console.warn(`GitHub API error for URL ${requestedUrl}: ${status} ${statusText}`);
+                throw new Error(`GitHub API Error: ${status} ${statusText}.`);
             }
         }
-    });
-    
-    function scrollToBottom() {
-        setTimeout(() => {
-            if (outputContainer) outputContainer.scrollTop = outputContainer.scrollHeight;
-        }, 0);
+        return await response.json();
     }
 
-    function createNewInputLine() {
-        if (activeCommandInput && activeCommandInput._keydownListener) {
-            activeCommandInput.removeEventListener('keydown', activeCommandInput._keydownListener);
-            activeCommandInput._keydownListener = null;
-        }
-
-        currentInputLineDiv = document.createElement('div');
-        currentInputLineDiv.className = 'input-line command-output-item';
-
-        const promptSpan = document.createElement('span');
-        promptSpan.className = 'prompt';
-        promptSpan.textContent = 'guest@terminal:~$';
-        currentInputLineDiv.appendChild(promptSpan);
-
-        activeCommandInput = document.createElement('input');
-        activeCommandInput.type = 'text';
-        // activeCommandInput.autofocus = true; // Replaced by attemptFocus
-        currentInputLineDiv.appendChild(activeCommandInput);
-
-        outputContainer.appendChild(currentInputLineDiv);
-
-        activeCommandInput._keydownListener = handleCommandInputKeydown;
-        activeCommandInput.addEventListener('keydown', activeCommandInput._keydownListener);
-
-        attemptFocus(activeCommandInput);
-        scrollToBottom();
-    }
-
-    
-
-    async function init() {
-        outputContainer.innerHTML = '';
-        await fetchPostsManifest();
-
-        displayOutput("Welcome to Terminal Blog!");
-        displayOutput("Type 'help' to see available commands or '?' for a short list.");
-        displayOutput("");
-
-        createNewInputLine();
-
-        if (!terminal.dataset.listenersAttached) {
-            document.addEventListener('keydown', handleGlobalKeyPress);
-            outputContainer.addEventListener('click', (event) => {
-                if (currentView) return;
-                if (event.target.tagName === 'BUTTON' || event.target.closest('button')) {
-                    return;
-                }
-                if (activeCommandInput &&
-                    currentInputLineDiv && !currentInputLineDiv.contains(event.target)) {
-                    const selection = window.getSelection();
-                     if (!(selection.toString().length > 0 && outputContainer.contains(selection.anchorNode))) {
-                        attemptFocus(activeCommandInput);
-                    }
-                } else if (activeCommandInput && event.target === outputContainer) {
-                    attemptFocus(activeCommandInput);
-                }
-            });
-            terminal.dataset.listenersAttached = 'true';
-        }
-    }
-
-    async function fetchPostsManifest() {
+    // Helper to get raw file content
+    async function fetchRawGitHubContent(owner, repoName, path, branch = 'main') {
+        const url = `https://raw.githubusercontent.com/${owner}/${repoName}/${branch}/${path}`;
+        let response;
         try {
-            const response = await fetch('public/posts/posts.json');
-            if (!response.ok) { throw new Error(`HTTP error! ${response.status} ${response.statusText}`); }
-            postsManifest = await response.json();
-        } catch (error) {
-            console.error("Failed to load posts.json:", error);
-            const errDiv = document.createElement('div');
-            errDiv.className = 'command-output-item error';
-            errDiv.textContent = `Error: Could not load posts manifest. ${error.message}`;
-            if (outputContainer) {
-                if (currentInputLineDiv && outputContainer.contains(currentInputLineDiv)) {
-                     outputContainer.insertBefore(errDiv, currentInputLineDiv);
-                } else {
-                    outputContainer.appendChild(errDiv);
-                }
+            response = await fetch(url);
+        } catch (networkError) {
+            console.error("Network error fetching raw GitHub content:", networkError);
+            throw new Error(`Network request failed. Please check your internet connection.`);
+        }
+
+        if (!response.ok) {
+            const status = response.status;
+            const statusText = response.statusText;
+            if (status === 404) {
+                console.warn(`Raw content 404 Not Found for URL: ${url}`);
+                throw new Error(`Error: File not found: ${owner}/${repoName}/${path}`);
             } else {
-                console.error("outputContainer not ready for fetchPostsManifest error.");
+                console.warn(`Raw content error for URL ${url}: ${status} ${statusText}`);
+                throw new Error(`Error fetching file: ${status} ${statusText}.`);
             }
-            postsManifest = [];
         }
+        return await response.text();
     }
 
-    function displayOutput(text, type = 'output') {
-        if (text === undefined || text === null) return;
-        const div = document.createElement('div');
 
-        if (type !== 'sl-animation-frame' && type !== 'cowsay-output') {
-            div.classList.add('command-output-item');
-        }
 
-        if (type === 'error') {
-            div.classList.add('error'); div.textContent = String(text);
-        } else if (type === 'success') {
-            div.classList.add('success'); div.textContent = String(text);
-        } else if (type === 'rawhtml') {
-            div.innerHTML = String(text);
-        } else if (type === 'sl-animation-frame') {
-            div.className = 'sl-animation-frame';
-            div.textContent = String(text);
-        } else if (type === 'cowsay-output') {
-            div.className = 'cowsay-output command-output-item';
-            div.textContent = String(text);
+    function showTerminalFromModal() {
+        if(activeCommandInput) activeCommandInput.disabled = false;
+        modalView.style.display = 'none';
+        modalNanoHeader.style.display = 'none'; 
+        modalContentWrapper.classList.remove('vi-mode', 'nano-mode', 'less-mode');
+        currentView = null;
+        if(activeCommandInput) {
+            attemptFocus(activeCommandInput);
         }
-         else {
-            div.textContent = String(text);
-        }
-
-        if (currentInputLineDiv && outputContainer.contains(currentInputLineDiv)) {
-            outputContainer.insertBefore(div, currentInputLineDiv);
-        } else {
-            outputContainer.appendChild(div);
-        }
+        scrollToBottom(); 
     }
 
-    function addCopyButtonsToCodeBlocks(containerElement) {
-        containerElement.querySelectorAll('pre').forEach(preBlock => {
-            console.log('Found <pre> block:', preBlock);
-    
-            let wrapper = preBlock.parentElement;
-    
-            // Check for wrapper
-            if (!wrapper || !wrapper.classList.contains('code-block-wrapper')) {
-                console.log('No wrapper found, creating one.');
-                const contentParent = preBlock.closest('.markdown-content, .modal-content');
-                if (contentParent) {
-                    wrapper = document.createElement('div');
-                    wrapper.className = 'code-block-wrapper';
-                    preBlock.parentNode.insertBefore(wrapper, preBlock);
-                    wrapper.appendChild(preBlock);
-                    console.log('Wrapper created and <pre> moved inside.');
-                } else {
-                    wrapper = preBlock;
-                    preBlock.style.position = 'relative';
-                    console.log('Using <pre> as wrapper (no content parent found).');
-                }
-            }
-    
-            // Add copy button if it doesn't already exist
-            if (!wrapper.querySelector('.code-copy-button')) {
-                const button = document.createElement('button');
-                button.className = 'code-copy-button';
-                button.textContent = 'Copy';
-                wrapper.appendChild(button);
-                console.log('Copy button created and appended.');
-            } else {
-                console.log('Copy button already exists, skipping.');
-            }
-        });
-    }
-    
-    
-
-    async function handleCommandInputKeydown(e) {
-        if (currentView || !activeCommandInput) return;
-
-        if (slInterval && e.key.toLowerCase() !== 'c' && !e.ctrlKey) {
-             e.preventDefault();
-             return;
-        }
-
-        if (e.ctrlKey) {
-            let preventDefault = true;
-            switch (e.key.toLowerCase()) {
-                case 'a': activeCommandInput.setSelectionRange(0, 0); break;
-                case 'e': activeCommandInput.setSelectionRange(activeCommandInput.value.length, activeCommandInput.value.length); break;
-                case 'u': activeCommandInput.value = ''; break;
-                case 'l': commands.clear(); scrollToBottom(); break;
-                case 'c':
-                    if (slInterval) {
-                        clearInterval(slInterval);
-                        slInterval = null;
-                        const slFrameDiv = outputContainer.querySelector('.sl-animation-frame');
-                        if (slFrameDiv) {
-                             slFrameDiv.textContent += "\n*** SL Interrupted ***";
-                        } else {
-                            displayOutput("*** SL Interrupted ***");
-                        }
-                         // Remove the input line that invoked SL, then create new.
-                        if (currentInputLineDiv && currentInputLineDiv.parentNode === outputContainer) {
-                            outputContainer.removeChild(currentInputLineDiv);
-                        }
-                        activeCommandInput = null; // Ensure it's cleared
-                        currentInputLineDiv = null;
-                        createNewInputLine();
-                        preventDefault = true;
-                    } else {
-                        const currentCmdTextForCtrlC = activeCommandInput.value;
-                        if (currentInputLineDiv && activeCommandInput) {
-                            currentInputLineDiv.removeChild(activeCommandInput);
-                            currentInputLineDiv.appendChild(document.createTextNode(currentCmdTextForCtrlC + "^C"));
-                            activeCommandInput.removeEventListener('keydown', handleCommandInputKeydown);
-                            activeCommandInput = null;
-                            currentInputLineDiv = null;
-                        }
-                        createNewInputLine();
-                    }
-                    break;
-                default: preventDefault = false;
-            }
-            if (preventDefault) e.preventDefault();
-            if (['a','e','u','l','c'].includes(e.key.toLowerCase())) return;
-        }
-
-        if (e.key === 'Enter') {
-            e.preventDefault();
-            if (slInterval) return;
-
-            const commandText = activeCommandInput.value.trim();
-
-            if (currentInputLineDiv && activeCommandInput) {
-                 currentInputLineDiv.removeChild(activeCommandInput);
-                 currentInputLineDiv.appendChild(document.createTextNode(commandText));
-                 activeCommandInput.removeEventListener('keydown', handleCommandInputKeydown);
-                 activeCommandInput = null;
-                 currentInputLineDiv = null;
-            }
-
-            if (commandText) {
-                commandHistory.unshift(commandText);
-                historyIndex = -1;
-            }
-
-            await processCommand(commandText);
-
-            if (!slInterval) {
-                createNewInputLine();
-            }
-            return;
-        }
-        else if (e.key === 'ArrowUp') {
-            e.preventDefault();
-            if (commandHistory.length > 0 && activeCommandInput) {
-                historyIndex = Math.min(historyIndex + 1, commandHistory.length - 1);
-                activeCommandInput.value = commandHistory[historyIndex];
-                activeCommandInput.setSelectionRange(activeCommandInput.value.length, activeCommandInput.value.length);
-            }
-        } else if (e.key === 'ArrowDown') {
-            e.preventDefault();
-            if (activeCommandInput) {
-                if (historyIndex > 0) {
-                    historyIndex--;
-                    activeCommandInput.value = commandHistory[historyIndex];
-                    activeCommandInput.setSelectionRange(activeCommandInput.value.length, activeCommandInput.value.length);
-                } else {
-                    historyIndex = -1;
-                    activeCommandInput.value = '';
-                }
-            }
-        } else if (e.key === 'Tab') {
-            e.preventDefault();
-            if (!activeCommandInput) return;
-
-            const currentInputValue = activeCommandInput.value;
-            const parts = currentInputValue.split(' ');
-            // const currentWord = parts.length > 0 ? parts[parts.length - 1].toLowerCase() : ""; // Not strictly needed with currentArgText
-            const atStartOfNewWord = currentInputValue.endsWith(" ") || parts[parts.length -1] === ""; // If true, currentArgText will be ""
-            // const wordToComplete = atStartOfNewWord ? "" : parts[parts.length - 1]; // Replaced by currentArgText (non-lowercased)
-
-            let suggestions = [];
-            const commandName = parts[0].toLowerCase(); // command is a reserved keyword in some contexts
-            const baseDirs = ["posts/", "repo/"];
-
-            // Scenario 1: Completing the command itself
-            if (parts.length === 1 && !currentInputValue.endsWith(" ")) {
-                const commandPartToComplete = parts[0]; // wordToComplete equivalent for command
-                suggestions = Object.keys(commands).filter(cmd => cmd.startsWith(commandPartToComplete));
-            }
-            // Scenario 2: Completing arguments for a command
-            else if (parts.length >= 1 && commandName) { // Command name is present or fully typed
-                const argIndex = currentInputValue.endsWith(" ") ? parts.length : parts.length - 1; // Keep only one
-                const currentArgText = currentInputValue.endsWith(" ") ? "" : parts[parts.length - 1];
-
-                // Ensure commandName is valid before proceeding with argument completion
-                if (commandName && commands[commandName]) {
-                    if (commandName === 'ls' || ['cat', 'less', 'vi', 'nano'].includes(commandName)) {
-                        if (argIndex === 1) { // Completing the first argument (path)
-                            if (currentArgText.startsWith("posts/")) {
-                                const filePrefix = currentArgText.substring("posts/".length);
-                            suggestions = postsManifest
-                                .filter(post => post.name.toLowerCase().startsWith(filePrefix.toLowerCase()))
-                                .map(p => "posts/" + p.name);
-                        } else if (currentArgText.startsWith("repo/")) {
-                            const repoPathPart = currentArgText.substring("repo/".length);
-                            const repoPathSegments = repoPathPart.split('/');
-                            
-                            if (repoPathSegments.length === 1) { // Completing repo name: "repo/my-p" or "repo/"
-                                const partialRepoName = repoPathSegments[0];
-                                if (userRepoNamesCache === null) {
-                                    showLoadingSuggestions(outputContainer, currentInputLineDiv);
-                                    try {
-                                        const repos = await fetchGitHubApi(`https://api.github.com/users/robertovacirca/repos`);
-                                        userRepoNamesCache = repos.map(r => r.name);
-                                    } catch (err) {
-                                        displayOutput(`Error fetching repositories: ${err.message}`, 'error');
-                                        userRepoNamesCache = []; // Avoid retrying on every tab for a failed fetch
-                                    } finally {
-                                        hideLoadingSuggestions();
-                                    }
-                                }
-                                suggestions = (userRepoNamesCache || [])
-                                    .filter(name => name.startsWith(partialRepoName))
-                                    .map(name => `repo/${name}/`);
-                            } else { // Completing path inside a repo: "repo/my-portfolio/sr" or "repo/my-portfolio/src/"
-                                const repoName = repoPathSegments[0];
-                                const pathPrefixSegments = repoPathSegments.slice(1, -1); // Path up to the part being completed
-                                const itemToComplete = repoPathSegments[repoPathSegments.length - 1];
-                                const cacheKey = `${repoName}/${pathPrefixSegments.join('/')}`;
-                                const fullPathToFetch = `repos/robertovacirca/${repoName}/contents/${pathPrefixSegments.join('/')}`;
-
-                                if (!repoContentsCache[cacheKey]) {
-                                    showLoadingSuggestions(outputContainer, currentInputLineDiv);
-                                    try {
-                                        const contents = await fetchGitHubApi(`https://api.github.com/repos/robertovacirca/${repoName}/contents/${pathPrefixSegments.join('/')}`);
-                                        if (Array.isArray(contents)) {
-                                            repoContentsCache[cacheKey] = contents;
-                                        } else {
-                                            // If the API returns a single file object for a path that was expected to be a dir,
-                                            // or any other non-array response that isn't an error.
-                                            console.warn(`Tab completion: Expected array for ${cacheKey}, received:`, contents);
-                                            repoContentsCache[cacheKey] = []; // Cache empty array
-                                        }
-                                    } catch (err) {
-                                        displayOutput(`Error fetching suggestions for ${repoName}/${pathPrefixSegments.join('/')}: ${err.message}`, 'error');
-                                        repoContentsCache[cacheKey] = []; // Cache empty array on error
-                                    } finally {
-                                        hideLoadingSuggestions();
-                                    }
-                                }
-                                // Ensure that we only try to filter if repoContentsCache[cacheKey] is actually an array.
-                                // The `|| []` handles cases where cacheKey might not exist yet if fetch failed early or is in progress.
-                                const cachedContent = repoContentsCache[cacheKey];
-                                suggestions = (Array.isArray(cachedContent) ? cachedContent : [])
-                                    .filter(item => item.name.startsWith(itemToComplete))
-                                    .map(item => `repo/${repoName}/${pathPrefixSegments.join('/') ? pathPrefixSegments.join('/') + '/' : ''}${item.name}${item.type === 'dir' ? '/' : ''}`);
-                            }
-                        } else { // Suggest "posts/" or "repo/"
-                            suggestions = baseDirs.filter(dir => dir.startsWith(currentArgText));
-                        }
-                    }
-                } else if (commandName === 'man') {
-                    if (argIndex === 1) { // Completing the command name argument for 'man'
-                         suggestions = Object.keys(commandHelp).filter(cmd => cmd.startsWith(currentArgText) && cmd !== '?');
-                    }
-                }
-                // Add other command-specific argument completion logic here if needed
-            }
-
-            // Ensure suggestions are unique (e.g. if multiple logic paths could add the same suggestion)
-            if (suggestions.length > 0) {
-                suggestions = [...new Set(suggestions)];
-            }
-
-            if (suggestions.length === 1) {
-                const suggestion = suggestions[0];
-                parts[parts.length - 1] = suggestion; // Replace current word with suggestion
-
-                let finalValue;
-                if (suggestion.endsWith('/')) {
-                    // For directory-like suggestions (e.g., "posts/"), complete without adding an extra space immediately after.
-                    finalValue = parts.join(' ');
-                } else {
-                    // For commands or filenames, add a space after completion.
-                    finalValue = parts.join(' ') + ' ';
-                }
-                activeCommandInput.value = finalValue;
-                activeCommandInput.setSelectionRange(activeCommandInput.value.length, activeCommandInput.value.length);
-            } else if (suggestions.length > 1) {
-                displayOutput(`Suggestions: ${suggestions.join('  ')}`);
-                scrollToBottom();
-            }
-        }
-    }
-
-async function processCommand(commandText) {
-    const parts = commandText.split(/\s+/).filter(s => s.length > 0);
-    const command = parts[0];
-    const args = parts.slice(1);
-
-    if (!command && commandText === "") {
-        // Empty enter press
-    } else if (command) {
-        // Special routing for cat, less, vi, nano for repo paths
-        if (['cat', 'less', 'vi', 'nano'].includes(command.toLowerCase()) && 
-            args[0] && 
-            (args[0].toLowerCase().startsWith('repo/') || args[0].toLowerCase().startsWith('repos/'))) {
-            
-            const fullPathArg = args[0]; 
-            let pathWithoutPrefix = '';
-            
-            if (fullPathArg.toLowerCase().startsWith('repo/')) {
-                pathWithoutPrefix = fullPathArg.substring('repo/'.length);
-            } else if (fullPathArg.toLowerCase().startsWith('repos/')) {
-                pathWithoutPrefix = fullPathArg.substring('repos/'.length);
-            }
-
-            const pathParts = pathWithoutPrefix.split('/');
-            
-            // Ensure repoName is not empty (e.g. from "cat repo/")
-            if (pathParts.length >= 1 && pathParts[0]) { 
-                const repoName = pathParts[0];
-                const fileOrDirPath = pathParts.slice(1).join('/'); 
-
-                if (!fileOrDirPath) { 
-                    displayOutput(`${command}: '${fullPathArg}' is a directory. Please specify a file path.`, 'error');
-                    // No further processing for this command if only a directory is given to cat/less etc.
-                    // createNewInputLine(); // Not needed here as processCommand finishes and calls it
-                    return; 
-                }
-                
-                const targetReposCommandName = command.toLowerCase() + 'repos';
-                if (commands[targetReposCommandName]) {
-                    await commands[targetReposCommandName](repoName, fileOrDirPath);
-                } else {
-                    // This case should ideally not be hit if all ...repos commands are defined
-                    console.error(`Internal error: Command ${targetReposCommandName} not found, but routing logic directed to it.`);
-                    displayOutput(`Error: Command ${command} does not support repository operations for ${targetReposCommandName}.`, 'error');
-                }
-                return; // Exit after handling the repo-specific command
-            } else { 
-                 // Case where pathWithoutPrefix was empty or only contained slashes, making repoName empty.
-                 // e.g., user typed "cat repo/" or "cat repos//"
-                 displayOutput(`${command}: Invalid repository path specified: '${fullPathArg}'`, 'error');
-                 // createNewInputLine(); // Not needed here
-                 return;
-            }
-        }
-
-        // Default command handling (includes local posts for cat, etc.)
-        const cmdFunc = commands[command.toLowerCase()];
-        if (cmdFunc) {
-            try {
-                await cmdFunc(args);
-            } catch (error) {
-                console.error(`Error executing command '${command}':`, error);
-                displayOutput(`Error during ${command}: ${error.message}`, 'error');
-            }
-        } else {
-            displayOutput(`bash: command not found: ${command}`, 'error');
-            const commandNames = Object.keys(commands);
-            const threshold = 2; 
-            let suggestions = [];
-
-            for (const validCommand of commandNames) {
-                // Do not suggest '?' for commands longer than 1 char, unless the command itself is '?'
-                if (validCommand === "?" && command !== "?" && command.length > 1) continue; 
-                
-                const distance = levenshtein(command, validCommand);
-                if (distance <= threshold) {
-                    suggestions.push({ command: validCommand, distance: distance });
-                }
-            }
-
-            // Sort by distance, then alphabetically for commands with the same distance
-            suggestions.sort((a, b) => {
-                if (a.distance !== b.distance) {
-                    return a.distance - b.distance;
-                }
-                return a.command.localeCompare(b.command); 
-            });
-
-            if (suggestions.length > 0) {
-                let suggestionMsg = `Did you mean: ${suggestions[0].command} ?`;
-                // If a second suggestion exists AND it has the same minimal distance
-                // (already sorted alphabetically, so suggestions[0] and suggestions[1] are the chosen ones for ties)
-                if (suggestions.length > 1 && suggestions[1].distance === suggestions[0].distance) {
-                    suggestionMsg = `Did you mean: ${suggestions[0].command} or ${suggestions[1].command} ?`;
-                }
-                displayOutput(suggestionMsg);
-            }
-        }
-    }
-    if (!slInterval) {
-         scrollToBottom();
-    }
-}
-
-// Levenshtein distance function
-function levenshtein(s1, s2) {
-    if (s1.length < s2.length) { return levenshtein(s2, s1); }
-    if (s2.length === 0) { return s1.length; }
-    let previousRow = Array.from({ length: s2.length + 1 }, (_, i) => i);
-    for (let i = 0; i < s1.length; i++) {
-        let currentRow = [i + 1];
-        for (let j = 0; j < s2.length; j++) {
-            let insertions = previousRow[j + 1] + 1;
-            let deletions = currentRow[j] + 1;
-            let substitutions = previousRow[j] + (s1[i] !== s2[j]);
-            currentRow.push(Math.min(insertions, deletions, substitutions));
-        }
-        previousRow = currentRow;
-    }
-    return previousRow[previousRow.length - 1];
-}
 
     const commandHelp = {
         help: { description: "Show this help message." },
@@ -1272,6 +779,592 @@ function levenshtein(s1, s2) {
             }
         },
     };
+
+    let loadingMessageDiv = null;
+    function showLoadingSuggestions(outputContainerRef, currentInputLineDivRef) {
+        if (loadingMessageDiv) return; 
+        loadingMessageDiv = document.createElement('div');
+        loadingMessageDiv.className = 'command-output-item loader-message';
+        loadingMessageDiv.textContent = 'Fetching suggestions...';
+        if (currentInputLineDivRef && outputContainerRef.contains(currentInputLineDivRef)) {
+            outputContainerRef.insertBefore(loadingMessageDiv, currentInputLineDivRef);
+        } else {
+            outputContainerRef.appendChild(loadingMessageDiv);
+        }
+        scrollToBottom(); // Ensure it's visible
+    }
+
+    function hideLoadingSuggestions() {
+        if (loadingMessageDiv && loadingMessageDiv.parentNode) {
+            loadingMessageDiv.parentNode.removeChild(loadingMessageDiv);
+        }
+        loadingMessageDiv = null;
+    }
+
+    function attemptFocus(element) {
+        if (!element) return;
+    
+        try {
+            if (document.hasFocus()) {
+                element.focus({ preventScroll: true });
+            } else {
+                // Defer focus until the document gains focus again
+                const handleFocus = () => {
+                    element.focus({ preventScroll: true });
+                    window.removeEventListener('focus', handleFocus);
+                };
+                window.addEventListener('focus', handleFocus);
+            }
+        } catch (e) {
+            console.warn('attemptFocus failed:', e);
+        }
+    }
+    
+    document.addEventListener('click', e => {
+        if (e.target.classList.contains('code-copy-button')) {
+            console.log('Delegated click handler triggered!', e.target);
+            const wrapper = e.target.closest('.code-block-wrapper');
+            const code = wrapper?.querySelector('pre code');
+    
+            if (code) {
+                const text = code.innerText;
+                console.log('Copying text:', text);
+                navigator.clipboard.writeText(text).then(() => {
+                    console.log('Text copied successfully.');
+                    e.target.textContent = 'Copied!';
+                    setTimeout(() => e.target.textContent = 'Copy', 2000);
+                }).catch(err => {
+                    console.error('Clipboard write failed:', err);
+                    e.target.textContent = 'Error';
+                });
+            } else {
+                console.warn('No <code> element found to copy.');
+                e.target.textContent = 'Error';
+            }
+        }
+    });
+    
+    function scrollToBottom() {
+        setTimeout(() => {
+            if (outputContainer) outputContainer.scrollTop = outputContainer.scrollHeight;
+        }, 0);
+    }
+
+    function createNewInputLine() {
+        if (activeCommandInput && activeCommandInput._keydownListener) {
+            activeCommandInput.removeEventListener('keydown', activeCommandInput._keydownListener);
+            activeCommandInput._keydownListener = null;
+        }
+
+        currentInputLineDiv = document.createElement('div');
+        currentInputLineDiv.className = 'input-line command-output-item';
+
+        const promptSpan = document.createElement('span');
+        promptSpan.className = 'prompt';
+        promptSpan.textContent = 'guest@terminal:~$';
+        currentInputLineDiv.appendChild(promptSpan);
+
+        activeCommandInput = document.createElement('input');
+        activeCommandInput.type = 'text';
+        // activeCommandInput.autofocus = true; // Replaced by attemptFocus
+        currentInputLineDiv.appendChild(activeCommandInput);
+
+        outputContainer.appendChild(currentInputLineDiv);
+
+        activeCommandInput._keydownListener = handleCommandInputKeydown;
+        activeCommandInput.addEventListener('keydown', activeCommandInput._keydownListener);
+
+        attemptFocus(activeCommandInput);
+        scrollToBottom();
+    }
+
+    function handleGlobalKeyPress(e) { 
+        if (!currentView) return; 
+        const key = e.key.toLowerCase();
+
+        if (key === 'q' && ['less', 'vi', 'nano'].includes(currentView)) {
+            e.preventDefault(); showTerminalFromModal();
+        } else if (currentView === 'less') { 
+            const scrollAmount = 40; 
+            const pageScrollAmount = modalContent.clientHeight * 0.85;
+            if (key === 'arrowdown') { e.preventDefault(); modalContent.scrollTop += scrollAmount; }
+            else if (key === 'arrowup') { e.preventDefault(); modalContent.scrollTop -= scrollAmount; }
+            else if (key === 'pagedown' || key === ' ') { e.preventDefault(); modalContent.scrollTop += pageScrollAmount; }
+            else if (key === 'pageup' || key === 'b') { e.preventDefault(); modalContent.scrollTop -= pageScrollAmount; }
+            else if (key === 'home' || (key === 'g' && !e.shiftKey) ) { e.preventDefault(); modalContent.scrollTop = 0; } 
+            else if (key === 'end' || (key === 'g' && e.shiftKey) ) { e.preventDefault(); modalContent.scrollTop = modalContent.scrollHeight; }
+        }
+    }
+
+    function escapeHtml(str) { 
+        return String(str).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#039;");
+    }
+    
+    async function init() {
+        outputContainer.innerHTML = '';
+        await fetchPostsManifest();
+
+        displayOutput("Welcome to Terminal Blog!");
+        displayOutput("Type 'help' to see available commands or '?' for a short list.");
+        displayOutput("");
+
+        createNewInputLine();
+
+        if (!terminal.dataset.listenersAttached) {
+            document.addEventListener('keydown', handleGlobalKeyPress);
+            outputContainer.addEventListener('click', (event) => {
+                if (currentView) return;
+                if (event.target.tagName === 'BUTTON' || event.target.closest('button')) {
+                    return;
+                }
+                if (activeCommandInput &&
+                    currentInputLineDiv && !currentInputLineDiv.contains(event.target)) {
+                    const selection = window.getSelection();
+                     if (!(selection.toString().length > 0 && outputContainer.contains(selection.anchorNode))) {
+                        attemptFocus(activeCommandInput);
+                    }
+                } else if (activeCommandInput && event.target === outputContainer) {
+                    attemptFocus(activeCommandInput);
+                }
+            });
+            terminal.dataset.listenersAttached = 'true';
+        }
+    }
+
+    async function fetchPostsManifest() {
+        try {
+            const response = await fetch('public/posts/posts.json');
+            if (!response.ok) { throw new Error(`HTTP error! ${response.status} ${response.statusText}`); }
+            postsManifest = await response.json();
+        } catch (error) {
+            console.error("Failed to load posts.json:", error);
+            const errDiv = document.createElement('div');
+            errDiv.className = 'command-output-item error';
+            errDiv.textContent = `Error: Could not load posts manifest. ${error.message}`;
+            if (outputContainer) {
+                if (currentInputLineDiv && outputContainer.contains(currentInputLineDiv)) {
+                     outputContainer.insertBefore(errDiv, currentInputLineDiv);
+                } else {
+                    outputContainer.appendChild(errDiv);
+                }
+            } else {
+                console.error("outputContainer not ready for fetchPostsManifest error.");
+            }
+            postsManifest = [];
+        }
+    }
+
+    function displayOutput(text, type = 'output') {
+        if (text === undefined || text === null) return;
+        const div = document.createElement('div');
+
+        if (type !== 'sl-animation-frame' && type !== 'cowsay-output') {
+            div.classList.add('command-output-item');
+        }
+
+        if (type === 'error') {
+            div.classList.add('error'); div.textContent = String(text);
+        } else if (type === 'success') {
+            div.classList.add('success'); div.textContent = String(text);
+        } else if (type === 'rawhtml') {
+            div.innerHTML = String(text);
+        } else if (type === 'sl-animation-frame') {
+            div.className = 'sl-animation-frame';
+            div.textContent = String(text);
+        } else if (type === 'cowsay-output') {
+            div.className = 'cowsay-output command-output-item';
+            div.textContent = String(text);
+        }
+         else {
+            div.textContent = String(text);
+        }
+
+        if (currentInputLineDiv && outputContainer.contains(currentInputLineDiv)) {
+            outputContainer.insertBefore(div, currentInputLineDiv);
+        } else {
+            outputContainer.appendChild(div);
+        }
+    }
+
+    function addCopyButtonsToCodeBlocks(containerElement) {
+        containerElement.querySelectorAll('pre').forEach(preBlock => {
+            console.log('Found <pre> block:', preBlock);
+    
+            let wrapper = preBlock.parentElement;
+    
+            // Check for wrapper
+            if (!wrapper || !wrapper.classList.contains('code-block-wrapper')) {
+                console.log('No wrapper found, creating one.');
+                const contentParent = preBlock.closest('.markdown-content, .modal-content');
+                if (contentParent) {
+                    wrapper = document.createElement('div');
+                    wrapper.className = 'code-block-wrapper';
+                    preBlock.parentNode.insertBefore(wrapper, preBlock);
+                    wrapper.appendChild(preBlock);
+                    console.log('Wrapper created and <pre> moved inside.');
+                } else {
+                    wrapper = preBlock;
+                    preBlock.style.position = 'relative';
+                    console.log('Using <pre> as wrapper (no content parent found).');
+                }
+            }
+    
+            // Add copy button if it doesn't already exist
+            if (!wrapper.querySelector('.code-copy-button')) {
+                const button = document.createElement('button');
+                button.className = 'code-copy-button';
+                button.textContent = 'Copy';
+                wrapper.appendChild(button);
+                console.log('Copy button created and appended.');
+            } else {
+                console.log('Copy button already exists, skipping.');
+            }
+        });
+    }
+    
+    
+
+    async function handleCommandInputKeydown(e) {
+        if (currentView || !activeCommandInput) return;
+
+        if (slInterval && e.key.toLowerCase() !== 'c' && !e.ctrlKey) {
+             e.preventDefault();
+             return;
+        }
+
+        if (e.ctrlKey) {
+            let preventDefault = true;
+            switch (e.key.toLowerCase()) {
+                case 'a': activeCommandInput.setSelectionRange(0, 0); break;
+                case 'e': activeCommandInput.setSelectionRange(activeCommandInput.value.length, activeCommandInput.value.length); break;
+                case 'u': activeCommandInput.value = ''; break;
+                case 'l': commands.clear(); scrollToBottom(); break;
+                case 'c':
+                    if (slInterval) {
+                        clearInterval(slInterval);
+                        slInterval = null;
+                        const slFrameDiv = outputContainer.querySelector('.sl-animation-frame');
+                        if (slFrameDiv) {
+                             slFrameDiv.textContent += "\n*** SL Interrupted ***";
+                        } else {
+                            displayOutput("*** SL Interrupted ***");
+                        }
+                         // Remove the input line that invoked SL, then create new.
+                        if (currentInputLineDiv && currentInputLineDiv.parentNode === outputContainer) {
+                            outputContainer.removeChild(currentInputLineDiv);
+                        }
+                        activeCommandInput = null; // Ensure it's cleared
+                        currentInputLineDiv = null;
+                        createNewInputLine();
+                        preventDefault = true;
+                    } else {
+                        const currentCmdTextForCtrlC = activeCommandInput.value;
+                        if (currentInputLineDiv && activeCommandInput) {
+                            currentInputLineDiv.removeChild(activeCommandInput);
+                            currentInputLineDiv.appendChild(document.createTextNode(currentCmdTextForCtrlC + "^C"));
+                            activeCommandInput.removeEventListener('keydown', handleCommandInputKeydown);
+                            activeCommandInput = null;
+                            currentInputLineDiv = null;
+                        }
+                        createNewInputLine();
+                    }
+                    break;
+                default: preventDefault = false;
+            }
+            if (preventDefault) e.preventDefault();
+            if (['a','e','u','l','c'].includes(e.key.toLowerCase())) return;
+        }
+
+        if (e.key === 'Enter') {
+            e.preventDefault();
+            if (slInterval) return;
+
+            const commandText = activeCommandInput.value.trim();
+
+            if (currentInputLineDiv && activeCommandInput) {
+                 currentInputLineDiv.removeChild(activeCommandInput);
+                 currentInputLineDiv.appendChild(document.createTextNode(commandText));
+                 activeCommandInput.removeEventListener('keydown', handleCommandInputKeydown);
+                 activeCommandInput = null;
+                 currentInputLineDiv = null;
+            }
+
+            if (commandText) {
+                commandHistory.unshift(commandText);
+                historyIndex = -1;
+            }
+
+            await processCommand(commandText);
+
+            if (!slInterval) {
+                createNewInputLine();
+            }
+            return;
+        }
+        else if (e.key === 'ArrowUp') {
+            e.preventDefault();
+            if (commandHistory.length > 0 && activeCommandInput) {
+                historyIndex = Math.min(historyIndex + 1, commandHistory.length - 1);
+                activeCommandInput.value = commandHistory[historyIndex];
+                activeCommandInput.setSelectionRange(activeCommandInput.value.length, activeCommandInput.value.length);
+            }
+        } else if (e.key === 'ArrowDown') {
+            e.preventDefault();
+            if (activeCommandInput) {
+                if (historyIndex > 0) {
+                    historyIndex--;
+                    activeCommandInput.value = commandHistory[historyIndex];
+                    activeCommandInput.setSelectionRange(activeCommandInput.value.length, activeCommandInput.value.length);
+                } else {
+                    historyIndex = -1;
+                    activeCommandInput.value = '';
+                }
+            }
+        } else if (e.key === 'Tab') {
+            e.preventDefault();
+            if (!activeCommandInput) return;
+
+            const currentInputValue = activeCommandInput.value;
+            const parts = currentInputValue.split(' ');
+            // const currentWord = parts.length > 0 ? parts[parts.length - 1].toLowerCase() : ""; // Not strictly needed with currentArgText
+            const atStartOfNewWord = currentInputValue.endsWith(" ") || parts[parts.length -1] === ""; // If true, currentArgText will be ""
+            // const wordToComplete = atStartOfNewWord ? "" : parts[parts.length - 1]; // Replaced by currentArgText (non-lowercased)
+
+            let suggestions = [];
+            const commandName = parts[0].toLowerCase(); // command is a reserved keyword in some contexts
+            const baseDirs = ["posts/", "repo/"];
+
+            // Scenario 1: Completing the command itself
+            if (parts.length === 1 && !currentInputValue.endsWith(" ")) {
+                const commandPartToComplete = parts[0]; // wordToComplete equivalent for command
+                suggestions = Object.keys(commands).filter(cmd => cmd.startsWith(commandPartToComplete));
+            }
+            // Scenario 2: Completing arguments for a command
+            else if (parts.length >= 1 && commandName) { // Command name is present or fully typed
+                const argIndex = currentInputValue.endsWith(" ") ? parts.length : parts.length - 1; // Keep only one
+                const currentArgText = currentInputValue.endsWith(" ") ? "" : parts[parts.length - 1];
+
+                // Ensure commandName is valid before proceeding with argument completion
+                if (commandName && commands[commandName]) {
+                    if (commandName === 'ls' || ['cat', 'less', 'vi', 'nano'].includes(commandName)) {
+                        if (argIndex === 1) { // Completing the first argument (path)
+                            if (currentArgText.startsWith("posts/")) {
+                                const filePrefix = currentArgText.substring("posts/".length);
+                            suggestions = postsManifest
+                                .filter(post => post.name.toLowerCase().startsWith(filePrefix.toLowerCase()))
+                                .map(p => "posts/" + p.name);
+                        } else if (currentArgText.startsWith("repo/")) {
+                            const repoPathPart = currentArgText.substring("repo/".length);
+                            const repoPathSegments = repoPathPart.split('/');
+                            
+                            if (repoPathSegments.length === 1) { // Completing repo name: "repo/my-p" or "repo/"
+                                const partialRepoName = repoPathSegments[0];
+                                if (userRepoNamesCache === null) {
+                                    showLoadingSuggestions(outputContainer, currentInputLineDiv);
+                                    try {
+                                        const repos = await fetchGitHubApi(`https://api.github.com/users/robertovacirca/repos`);
+                                        userRepoNamesCache = repos.map(r => r.name);
+                                    } catch (err) {
+                                        displayOutput(`Error fetching repositories: ${err.message}`, 'error');
+                                        userRepoNamesCache = []; // Avoid retrying on every tab for a failed fetch
+                                    } finally {
+                                        hideLoadingSuggestions();
+                                    }
+                                }
+                                suggestions = (userRepoNamesCache || [])
+                                    .filter(name => name.startsWith(partialRepoName))
+                                    .map(name => `repo/${name}/`);
+                            } else { // Completing path inside a repo: "repo/my-portfolio/sr" or "repo/my-portfolio/src/"
+                                const repoName = repoPathSegments[0];
+                                const pathPrefixSegments = repoPathSegments.slice(1, -1); // Path up to the part being completed
+                                const itemToComplete = repoPathSegments[repoPathSegments.length - 1];
+                                const cacheKey = `${repoName}/${pathPrefixSegments.join('/')}`;
+                                const fullPathToFetch = `repos/robertovacirca/${repoName}/contents/${pathPrefixSegments.join('/')}`;
+
+                                if (!repoContentsCache[cacheKey]) {
+                                    showLoadingSuggestions(outputContainer, currentInputLineDiv);
+                                    try {
+                                        const contents = await fetchGitHubApi(`https://api.github.com/repos/robertovacirca/${repoName}/contents/${pathPrefixSegments.join('/')}`);
+                                        if (Array.isArray(contents)) {
+                                            repoContentsCache[cacheKey] = contents;
+                                        } else {
+                                            // If the API returns a single file object for a path that was expected to be a dir,
+                                            // or any other non-array response that isn't an error.
+                                            console.warn(`Tab completion: Expected array for ${cacheKey}, received:`, contents);
+                                            repoContentsCache[cacheKey] = []; // Cache empty array
+                                        }
+                                    } catch (err) {
+                                        displayOutput(`Error fetching suggestions for ${repoName}/${pathPrefixSegments.join('/')}: ${err.message}`, 'error');
+                                        repoContentsCache[cacheKey] = []; // Cache empty array on error
+                                    } finally {
+                                        hideLoadingSuggestions();
+                                    }
+                                }
+                                // Ensure that we only try to filter if repoContentsCache[cacheKey] is actually an array.
+                                // The `|| []` handles cases where cacheKey might not exist yet if fetch failed early or is in progress.
+                                const cachedContent = repoContentsCache[cacheKey];
+                                suggestions = (Array.isArray(cachedContent) ? cachedContent : [])
+                                    .filter(item => item.name.startsWith(itemToComplete))
+                                    .map(item => `repo/${repoName}/${pathPrefixSegments.join('/') ? pathPrefixSegments.join('/') + '/' : ''}${item.name}${item.type === 'dir' ? '/' : ''}`);
+                            }
+                        } else { // Suggest "posts/" or "repo/"
+                            suggestions = baseDirs.filter(dir => dir.startsWith(currentArgText));
+                        }
+                    }
+                } else if (commandName === 'man') {
+                    if (argIndex === 1) { // Completing the command name argument for 'man'
+                         suggestions = Object.keys(commandHelp).filter(cmd => cmd.startsWith(currentArgText) && cmd !== '?');
+                    }
+                }
+                // Add other command-specific argument completion logic here if needed
+            }
+
+            // Ensure suggestions are unique (e.g. if multiple logic paths could add the same suggestion)
+            if (suggestions.length > 0) {
+                suggestions = [...new Set(suggestions)];
+            }
+
+            if (suggestions.length === 1) {
+                const suggestion = suggestions[0];
+                parts[parts.length - 1] = suggestion; // Replace current word with suggestion
+
+                let finalValue;
+                if (suggestion.endsWith('/')) {
+                    // For directory-like suggestions (e.g., "posts/"), complete without adding an extra space immediately after.
+                    finalValue = parts.join(' ');
+                } else {
+                    // For commands or filenames, add a space after completion.
+                    finalValue = parts.join(' ') + ' ';
+                }
+                activeCommandInput.value = finalValue;
+                activeCommandInput.setSelectionRange(activeCommandInput.value.length, activeCommandInput.value.length);
+            } else if (suggestions.length > 1) {
+                displayOutput(`Suggestions: ${suggestions.join('  ')}`);
+                scrollToBottom();
+            }
+        }
+    }
+
+async function processCommand(commandText) {
+    const parts = commandText.split(/\s+/).filter(s => s.length > 0);
+    const command = parts[0];
+    const args = parts.slice(1);
+
+    if (!command && commandText === "") {
+        // Empty enter press
+    } else if (command) {
+        // Special routing for cat, less, vi, nano for repo paths
+        if (['cat', 'less', 'vi', 'nano'].includes(command.toLowerCase()) && 
+            args[0] && 
+            (args[0].toLowerCase().startsWith('repo/') || args[0].toLowerCase().startsWith('repos/'))) {
+            
+            const fullPathArg = args[0]; 
+            let pathWithoutPrefix = '';
+            
+            if (fullPathArg.toLowerCase().startsWith('repo/')) {
+                pathWithoutPrefix = fullPathArg.substring('repo/'.length);
+            } else if (fullPathArg.toLowerCase().startsWith('repos/')) {
+                pathWithoutPrefix = fullPathArg.substring('repos/'.length);
+            }
+
+            const pathParts = pathWithoutPrefix.split('/');
+            
+            // Ensure repoName is not empty (e.g. from "cat repo/")
+            if (pathParts.length >= 1 && pathParts[0]) { 
+                const repoName = pathParts[0];
+                const fileOrDirPath = pathParts.slice(1).join('/'); 
+
+                if (!fileOrDirPath) { 
+                    displayOutput(`${command}: '${fullPathArg}' is a directory. Please specify a file path.`, 'error');
+                    // No further processing for this command if only a directory is given to cat/less etc.
+                    // createNewInputLine(); // Not needed here as processCommand finishes and calls it
+                    return; 
+                }
+                
+                const targetReposCommandName = command.toLowerCase() + 'repos';
+                if (commands[targetReposCommandName]) {
+                    await commands[targetReposCommandName](repoName, fileOrDirPath);
+                } else {
+                    // This case should ideally not be hit if all ...repos commands are defined
+                    console.error(`Internal error: Command ${targetReposCommandName} not found, but routing logic directed to it.`);
+                    displayOutput(`Error: Command ${command} does not support repository operations for ${targetReposCommandName}.`, 'error');
+                }
+                return; // Exit after handling the repo-specific command
+            } else { 
+                 // Case where pathWithoutPrefix was empty or only contained slashes, making repoName empty.
+                 // e.g., user typed "cat repo/" or "cat repos//"
+                 displayOutput(`${command}: Invalid repository path specified: '${fullPathArg}'`, 'error');
+                 // createNewInputLine(); // Not needed here
+                 return;
+            }
+        }
+
+        // Default command handling (includes local posts for cat, etc.)
+        const cmdFunc = commands[command.toLowerCase()];
+        if (cmdFunc) {
+            try {
+                await cmdFunc(args);
+            } catch (error) {
+                console.error(`Error executing command '${command}':`, error);
+                displayOutput(`Error during ${command}: ${error.message}`, 'error');
+            }
+        } else {
+            displayOutput(`bash: command not found: ${command}`, 'error');
+            const commandNames = Object.keys(commands);
+            const threshold = 2; 
+            let suggestions = [];
+
+            for (const validCommand of commandNames) {
+                // Do not suggest '?' for commands longer than 1 char, unless the command itself is '?'
+                if (validCommand === "?" && command !== "?" && command.length > 1) continue; 
+                
+                const distance = levenshtein(command, validCommand);
+                if (distance <= threshold) {
+                    suggestions.push({ command: validCommand, distance: distance });
+                }
+            }
+
+            // Sort by distance, then alphabetically for commands with the same distance
+            suggestions.sort((a, b) => {
+                if (a.distance !== b.distance) {
+                    return a.distance - b.distance;
+                }
+                return a.command.localeCompare(b.command); 
+            });
+
+            if (suggestions.length > 0) {
+                let suggestionMsg = `Did you mean: ${suggestions[0].command} ?`;
+                // If a second suggestion exists AND it has the same minimal distance
+                // (already sorted alphabetically, so suggestions[0] and suggestions[1] are the chosen ones for ties)
+                if (suggestions.length > 1 && suggestions[1].distance === suggestions[0].distance) {
+                    suggestionMsg = `Did you mean: ${suggestions[0].command} or ${suggestions[1].command} ?`;
+                }
+                displayOutput(suggestionMsg);
+            }
+        }
+    }
+    if (!slInterval) {
+         scrollToBottom();
+    }
+}
+
+// Levenshtein distance function
+function levenshtein(s1, s2) {
+    if (s1.length < s2.length) { return levenshtein(s2, s1); }
+    if (s2.length === 0) { return s1.length; }
+    let previousRow = Array.from({ length: s2.length + 1 }, (_, i) => i);
+    for (let i = 0; i < s1.length; i++) {
+        let currentRow = [i + 1];
+        for (let j = 0; j < s2.length; j++) {
+            let insertions = previousRow[j + 1] + 1;
+            let deletions = currentRow[j] + 1;
+            let substitutions = previousRow[j] + (s1[i] !== s2[j]);
+            currentRow.push(Math.min(insertions, deletions, substitutions));
+        }
+        previousRow = currentRow;
+    }
+    return previousRow[previousRow.length - 1];
+}
     
     // Man, history implementations (already in full command object from prior response)
     commands.man = (args) => {
@@ -1284,84 +1377,6 @@ function levenshtein(s1, s2) {
         const reversedHistory=[...commandHistory].reverse(); 
         reversedHistory.forEach((cmd,index)=>{displayOutput(`  ${String(index+1).padStart(3)}  ${cmd}`);});
     };
-
-
-// Helper function to fetch from GitHub API
-async function fetchGitHubApi(url) {
-    let response;
-    try {
-        response = await fetch(url);
-    } catch (networkError) {
-        // Catches TypeError: Failed to fetch
-        console.error("Network error fetching from GitHub API:", networkError);
-        throw new Error(`Network request failed. Please check your internet connection.`);
-    }
-
-    if (!response.ok) {
-        const status = response.status;
-        const statusText = response.statusText;
-        const requestedUrl = response.url; // Get the actual URL requested
-
-        if (status === 403 && response.headers.get('X-RateLimit-Remaining') === '0') {
-            const resetTimeEpoch = parseInt(response.headers.get('X-RateLimit-Reset')) * 1000;
-            const resetTime = new Date(resetTimeEpoch).toLocaleTimeString();
-            console.warn(`GitHub API rate limit exceeded for URL: ${requestedUrl}`);
-            throw new Error(`GitHub API rate limit exceeded. Try again after ${resetTime}.`);
-        } else if (status === 404) {
-            console.warn(`GitHub API 404 Not Found for URL: ${requestedUrl}`);
-            // Extract a more user-friendly path if possible, otherwise show URL
-            const pathPart = requestedUrl.includes('/repos/') ? requestedUrl.split('/repos/')[1] : requestedUrl;
-            throw new Error(`Error: Repository or path not found: ${pathPart}`);
-        } else {
-            console.warn(`GitHub API error for URL ${requestedUrl}: ${status} ${statusText}`);
-            throw new Error(`GitHub API Error: ${status} ${statusText}.`);
-        }
-    }
-    return await response.json();
-}
-
-// Helper to get raw file content
-async function fetchRawGitHubContent(owner, repoName, path, branch = 'main') {
-    const url = `https://raw.githubusercontent.com/${owner}/${repoName}/${branch}/${path}`;
-    let response;
-    try {
-        response = await fetch(url);
-    } catch (networkError) {
-        console.error("Network error fetching raw GitHub content:", networkError);
-        throw new Error(`Network request failed. Please check your internet connection.`);
-    }
-
-    if (!response.ok) {
-        const status = response.status;
-        const statusText = response.statusText;
-        if (status === 404) {
-            console.warn(`Raw content 404 Not Found for URL: ${url}`);
-            throw new Error(`Error: File not found: ${owner}/${repoName}/${path}`);
-        } else {
-            console.warn(`Raw content error for URL ${url}: ${status} ${statusText}`);
-            throw new Error(`Error fetching file: ${status} ${statusText}.`);
-        }
-    }
-    return await response.text();
-}
-
-
-
-    function showTerminalFromModal() {
-        if(activeCommandInput) activeCommandInput.disabled = false;
-        modalView.style.display = 'none';
-        modalNanoHeader.style.display = 'none'; 
-        modalContentWrapper.classList.remove('vi-mode', 'nano-mode', 'less-mode');
-        currentView = null;
-        if(activeCommandInput) {
-            attemptFocus(activeCommandInput);
-        }
-        scrollToBottom(); 
-    }
-
-    function escapeHtml(str) { 
-        return String(str).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#039;");
-    }
 }
     
     init();
