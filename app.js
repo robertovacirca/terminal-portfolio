@@ -1256,8 +1256,11 @@ document.addEventListener('DOMContentLoaded', () => {
             }
             // Scenario 2: Completing arguments for a command
             else if (parts.length >= 1 && commandName) { // Command name is present or fully typed
-                const argIndex = currentInputValue.endsWith(" ") ? parts.length : parts.length - 1; // Keep only one
-                const currentArgText = currentInputValue.endsWith(" ") ? "" : parts[parts.length - 1];
+                // When split by space, if input ends with space, the last part is empty string.
+                // This empty string represents the new argument we are about to type.
+                // So the index of the argument we are completing is always the last index of parts.
+                const argIndex = parts.length - 1;
+                const currentArgText = parts[argIndex];
 
                 // Ensure commandName is valid before proceeding with argument completion
                 if (commandName && commands[commandName]) {
