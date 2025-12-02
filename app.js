@@ -290,7 +290,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 addCopyButtonsToCodeBlocks(tempRenderDiv); // Pass the element containing <pre> tags
                 
                 displayOutput(tempRenderDiv.innerHTML, 'rawhtml'); // Output the whole processed content
-            } catch (error) { displayOutput(`cat: ${filename}: ${error.message}`, 'error'); }
+            } catch (error) { displayOutput(`cat: ${filenameInput}: ${error.message}`, 'error'); }
         },
         less: async (args) => {
             if (args.length === 0) { displayOutput("Usage: less <filename>", 'error'); return; }
@@ -326,9 +326,9 @@ document.addEventListener('DOMContentLoaded', () => {
                 modalContentWrapper.classList.remove('vi-mode', 'nano-mode');
                 modalNanoHeader.style.display = 'none';
                 modalContent.innerHTML = tempRenderDiv.innerHTML; // Set modal content
-                modalFooter.innerHTML = `${filename} (Press 'q' to quit, Arrows/PgUp/PgDn/Home/End/Space to scroll)`;
+                modalFooter.innerHTML = `${filenameInput} (Press 'q' to quit, Arrows/PgUp/PgDn/Home/End/Space to scroll)`;
                 modalView.style.display = 'flex'; modalContent.scrollTop = 0; if(activeCommandInput) activeCommandInput.disabled = true;
-            } catch (error) { displayOutput(`less: ${filename}: ${error.message}`, 'error'); if(activeCommandInput) activeCommandInput.disabled = false; }
+            } catch (error) { displayOutput(`less: ${filenameInput}: ${error.message}`, 'error'); if(activeCommandInput) activeCommandInput.disabled = false; }
         },
         vi: async (args) => {
             if (args.length === 0) { displayOutput("Usage: vi <filename>", 'error'); return; }
@@ -358,14 +358,14 @@ document.addEventListener('DOMContentLoaded', () => {
                 modalNanoHeader.style.display = 'none';
                 modalContent.innerHTML = `<div style="white-space: pre;">${viFormattedContent}</div>`;
                 
-                modalFooter.innerHTML = `"${filename}" [readonly] (Press 'q' to quit)`;
+                modalFooter.innerHTML = `"${filenameInput}" [readonly] (Press 'q' to quit)`;
                 const copyAllButton = document.createElement('button');
                 copyAllButton.textContent = 'Copy All'; copyAllButton.className = 'modal-copy-all-button';
                 copyAllButton.onclick = (e) => { e.stopPropagation(); navigator.clipboard.writeText(textContent).then(() => { copyAllButton.textContent = 'Copied!'; copyAllButton.classList.add('copied'); setTimeout(()=> { copyAllButton.textContent='Copy All'; copyAllButton.classList.remove('copied');}, 2000);}).catch(err => { console.error('Failed to copy (vi):', err); copyAllButton.textContent = 'Error!'; copyAllButton.classList.add('error'); setTimeout(()=> { copyAllButton.textContent='Copy All'; copyAllButton.classList.remove('error');}, 2000);}); };
                 modalFooter.appendChild(copyAllButton);
 
                 modalView.style.display = 'flex'; modalContent.scrollTop = 0; if(activeCommandInput) activeCommandInput.disabled = true;
-            } catch (error) { displayOutput(`vi: ${filename}: ${error.message}`, 'error'); if(activeCommandInput) activeCommandInput.disabled = false; }
+            } catch (error) { displayOutput(`vi: ${filenameInput}: ${error.message}`, 'error'); if(activeCommandInput) activeCommandInput.disabled = false; }
         },
         nano: async (args) => {
             if (args.length === 0) { displayOutput("Usage: nano <filename>", 'error'); return; }
@@ -389,7 +389,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 const textContent = await response.text();
                 currentView = 'nano';
                 modalContentWrapper.classList.add('nano-mode'); modalContentWrapper.classList.remove('vi-mode', 'less-mode');
-                modalNanoHeader.textContent = `GNU nano (simulated)  File: ${filename}`;
+                modalNanoHeader.textContent = `GNU nano (simulated)  File: ${filenameInput}`;
                 modalNanoHeader.style.display = 'block';
                 modalContent.innerHTML = `<div style="white-space: pre;">${escapeHtml(textContent)}</div>`;
 
@@ -400,7 +400,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 modalFooter.appendChild(copyAllButton);
                 
                 modalView.style.display = 'flex'; modalContent.scrollTop = 0; if(activeCommandInput) activeCommandInput.disabled = true;
-            } catch (error) { displayOutput(`nano: ${filename}: ${error.message}`, 'error'); if(activeCommandInput) activeCommandInput.disabled = false; }
+            } catch (error) { displayOutput(`nano: ${filenameInput}: ${error.message}`, 'error'); if(activeCommandInput) activeCommandInput.disabled = false; }
         },
         sl: async () => {
             const trainFrames = [
@@ -1256,8 +1256,11 @@ document.addEventListener('DOMContentLoaded', () => {
             }
             // Scenario 2: Completing arguments for a command
             else if (parts.length >= 1 && commandName) { // Command name is present or fully typed
-                const argIndex = currentInputValue.endsWith(" ") ? parts.length : parts.length - 1; // Keep only one
-                const currentArgText = currentInputValue.endsWith(" ") ? "" : parts[parts.length - 1];
+                // When split by space, if input ends with space, the last part is empty string.
+                // This empty string represents the new argument we are about to type.
+                // So the index of the argument we are completing is always the last index of parts.
+                const argIndex = parts.length - 1;
+                const currentArgText = parts[argIndex];
 
                 // Ensure commandName is valid before proceeding with argument completion
                 if (commandName && commands[commandName]) {
