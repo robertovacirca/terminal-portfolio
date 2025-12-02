@@ -324,12 +324,15 @@ async function processCommand(commandText) {
 
         const pathParts = pathWithoutPrefix.split('/');
 
+        // Ensure repoName is not empty (e.g. from "cat repo/")
         if (pathParts.length >= 1 && pathParts[0]) {
             const repoName = pathParts[0];
             const fileOrDirPath = pathParts.slice(1).join('/');
 
             if (!fileOrDirPath) {
                 global.displayOutput(`${command}: '${fullPathArg}' is a directory. Please specify a file path.`, 'error');
+                // No further processing for this command if only a directory is given to cat/less etc.
+                // createNewInputLine(); // Not needed here as processCommand finishes and calls it
                 return;
             }
 
@@ -337,12 +340,16 @@ async function processCommand(commandText) {
             if (global.commands[targetReposCommandName]) {
                 await global.commands[targetReposCommandName](repoName, fileOrDirPath);
             } else {
+                // This case should ideally not be hit if all ...repos commands are defined
                 console.error(`Internal error: Command ${targetReposCommandName} not found, but routing logic directed to it.`);
                 global.displayOutput(`Error: Command ${command} does not support repository operations for ${targetReposCommandName}.`, 'error');
             }
-            return;
+            return; // Exit after handling the repo-specific command
         } else {
+             // Case where pathWithoutPrefix was empty or only contained slashes, making repoName empty.
+             // e.g., user typed "cat repo/" or "cat repos//"
              global.displayOutput(`${command}: Invalid repository path specified: '${fullPathArg}'`, 'error');
+             // createNewInputLine(); // Not needed here
              return;
         }
     }
@@ -360,14 +367,17 @@ async function processCommand(commandText) {
         const threshold = 2;
         let suggestions = [];
         for (const validCommand of commandNames) {
+            // Do not suggest '?' for commands longer than 1 char, unless the command itself is '?'
             if (validCommand === "?" && command !== "?" && command.length > 1) continue;
 
             const distance = global.levenshtein(command, validCommand);
+            // console.log(`Levenshtein: cmd=${command}, valid=${validCommand}, dist=${distance}`);
             if (distance <= threshold) {
                 suggestions.push({ command: validCommand, distance: distance });
             }
         }
         suggestions.sort((a, b) => a.distance - b.distance);
+        // console.log('Suggestions found:', suggestions);
 
         if (suggestions.length > 0) {
             let suggestionMsg = `Did you mean: ${suggestions[0].command} ?`;
@@ -392,15 +402,9 @@ async function handleCommandInputKeydown(event) {
     const baseDirs = ["posts/", "repo/"];
     let suggestions = [];
 
-    // Corrected argIndex logic:
-    // If 'ls ', parts=['ls', ''], length=2. endsWith(" ") is true.
-    // The part we are editing is parts[parts.length - 1] (the empty string).
-    // The index of that part is parts.length - 1.
-    // So argIndex should simply be parts.length - 1.
-    const argIndex = parts.length - 1;
-    const currentArgText = parts[argIndex];
+    // console.log(`Tab Keydown: val='${currentInputValue}', parts=${JSON.stringify(parts)}, cmd=${commandName}`);
 
-    if (argIndex === 0 && !currentInputValue.endsWith(" ")) {
+    if (parts.length === 1 && !currentInputValue.endsWith(" ")) {
         const commandPartToComplete = parts[0];
         suggestions = Object.keys(global.commands).filter(cmd => cmd.startsWith(commandPartToComplete));
     } else if (commandName) {
@@ -550,6 +554,7 @@ describe('Terminal App Core Features', () => {
         const calls = mockDisplayOutput.mock.calls;
         expect(calls[0][0]).toBe('Repositories in /repo:');
         expect(calls[1][0]).toEqual(expect.stringMatching(/Mar 20 2023\s+Py\s+★10\s+repo2\//));
+        // Adjusted regex to be more flexible with spaces around ★
         expect(calls[2][0]).toEqual(expect.stringMatching(/Jan 15 2023\s+JS\s+★\s*5\s+repo1\//));
     });
 
@@ -637,7 +642,8 @@ describe('Terminal App Core Features', () => {
         global.commands.catrepos = async (rn, fp) => {
             mockShowLoadingSuggestions();
             try {
-                const content = await global.fetchRawGitHubContent('robertovacirca', rn, fp);
+                const content = await global.fetchRawGitHubContent('robertovacirca', rn, fp); // Uses mocked fetch
+                // Use mocked marked.parse to match expectation
                 mockDisplayOutput(global.marked.parse(content), 'rawhtml');
             } catch (e) {
                 mockDisplayOutput(e.message, 'error');
@@ -663,6 +669,7 @@ describe('Terminal App Core Features', () => {
         text: () => Promise.resolve(fileContent),
       });
 
+      // Ensure catrepos mock is available (it should be from previous tests in the same describe block or defined globally)
       if (!global.commands.catrepos) {
          global.commands.catrepos = async (rn, fp) => {
             mockShowLoadingSuggestions();
@@ -685,6 +692,8 @@ describe('Terminal App Core Features', () => {
       const postContent = '# Local Post Title\nContent here.';
       mockPostsManifest.push({ name: postFileName, lastModified: '2024-01-01T00:00:00Z', size: 100 });
       
+      // Mock the fetch for the local post file
+      // This fetch is called by commands.cat (the actual one, or our mock of it)
       global.fetch.mockImplementation((url) => {
         if (url && url.includes(`public/posts/${postFileName}`)) {
           return Promise.resolve({
@@ -695,6 +704,7 @@ describe('Terminal App Core Features', () => {
         return Promise.resolve({ ok: false, status: 404, text: () => Promise.resolve("Not Found")});
       });
 
+      // Call processCommand, which will route to commands.cat
       await global.processCommand(`cat posts/${postFileName}`);
       expect(mockDisplayOutput).toHaveBeenCalledWith(`parsed:${postContent}`, 'rawhtml');
     });
@@ -708,7 +718,20 @@ describe('Terminal App Core Features', () => {
     }
 
     test('ls <tab> suggests posts/ and repo/', async () => {
+      // simulateTabCompletion does activeCommandInput.value = inputValue then calls handle...
+      // but in app.js Tab check: if (!activeCommandInput) return;
+      // In simulateTabCompletion we need to ensure activeCommandInput is set?
+      // Yes, global.activeCommandInput.value = inputValue sets it on the DOM element.
+      // But handleCommandInputKeydown uses global.activeCommandInput.value
+      // Let's verify handleCommandInputKeydown logic for 'ls '
+      // It splits 'ls ' -> parts=['ls', '']
+      // commandName='ls', argIndex=1, currentArgText=""
+      // if (commandName === 'ls' ...) -> true
+      // suggestions = baseDirs.filter(dir => dir.startsWith("")) -> ["posts/", "repo/"]
+      // It should output suggestions.
+
       await simulateTabCompletion('ls ');
+      // Wait for async operations just in case (though ls <tab> with no fetch shouldn't need it)
       expect(mockDisplayOutput).toHaveBeenCalledWith('Suggestions: posts/  repo/');
     });
 
@@ -849,8 +872,13 @@ describe('Terminal App Core Features', () => {
         global.commands.sl = jest.fn(); 
         await global.processCommand('l'); // 'l' is dist 1 from 'ls' and 'sl'
         expect(mockDisplayOutput).toHaveBeenCalledWith('bash: command not found: l', 'error');
-        expect(mockDisplayOutput).toHaveBeenCalledWith('Did you mean: ls or sl ?');
-        delete global.commands.sl;
+        // Order might vary based on Object.keys, so check for both possibilities
+        try {
+            expect(mockDisplayOutput).toHaveBeenCalledWith('Did you mean: ls or sl ?');
+        } catch (e) {
+            expect(mockDisplayOutput).toHaveBeenCalledWith('Did you mean: sl or ls ?');
+        }
+        delete global.commands.sl; // Clean up
     });
   });
 });
