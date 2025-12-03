@@ -1,5 +1,3 @@
----
-
 # Hello World!
 
 This is my first post on this terminal-style blog. Welcome!
