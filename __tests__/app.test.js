@@ -13,10 +13,22 @@ global.hljs = {
     highlightElement: jest.fn()
 };
 
-// Simulate parts of app.js's environment
-let mockActiveCommandInput;
-let mockOutputContainer;
-let mockCurrentInputLineDiv;
+// Helper to set up the DOM and load the app
+function setupApp() {
+    // Reset DOM - UPDATED TO INCLUDE NEW ELEMENTS
+    document.body.innerHTML = `
+        <div id="desktop-environment">
+            <div id="top-bar"></div>
+            <div id="desktop-icons">
+                 <div class="desktop-icon" data-name="posts" data-type="folder"></div>
+                 <div class="desktop-icon" data-name="repo" data-type="folder"></div>
+            </div>
+            <div id="dock">
+                <div class="dock-item" id="dock-terminal">
+                    <div class="dock-dot"></div>
+                </div>
+            </div>
+        </div>
 
 let commands; // Will be populated in beforeEach
 

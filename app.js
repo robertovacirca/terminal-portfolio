@@ -8,6 +8,170 @@ document.addEventListener('DOMContentLoaded', () => {
     const modalContent = document.getElementById('modal-content');
     const modalFooter = document.getElementById('modal-footer');
 
+    // Window Dragging Logic
+    const windowContainer = document.getElementById('window-container');
+    const titleBar = document.getElementById('window-title-bar');
+    const windowControls = document.querySelector('.window-controls');
+
+    // Desktop & Dock Logic
+    const dockTerminal = document.getElementById('dock-terminal');
+    const dockDot = dockTerminal.querySelector('.dock-dot');
+
+    // Toggle Terminal Visibility
+    windowControls.querySelector('.close').addEventListener('click', () => {
+        windowContainer.style.display = 'none';
+        dockDot.style.display = 'none';
+    });
+
+    dockTerminal.addEventListener('click', () => {
+        if (windowContainer.style.display === 'none') {
+            windowContainer.style.display = 'flex';
+            dockDot.style.display = 'block';
+            attemptFocus(activeCommandInput);
+        } else {
+            attemptFocus(activeCommandInput);
+        }
+    });
+
+    // File Manager Logic
+    const fileManager = document.getElementById('file-manager');
+    const fmClose = fileManager.querySelector('.fm-control.close');
+    const fmGrid = document.getElementById('fm-files-grid');
+    const fmPathBar = document.getElementById('fm-path-bar');
+    const desktopIcons = document.querySelectorAll('.desktop-icon');
+
+    fmClose.addEventListener('click', () => {
+        fileManager.style.display = 'none';
+    });
+
+    // Make File Manager Draggable too
+    const fmTitleBar = fileManager.querySelector('.fm-title-bar');
+    makeDraggable(fileManager, fmTitleBar);
+
+    desktopIcons.forEach(icon => {
+        icon.addEventListener('click', () => {
+            const name = icon.dataset.name; // 'posts' or 'repo'
+            openFileManager(name);
+        });
+    });
+
+    async function openFileManager(folderName) {
+        fileManager.style.display = 'flex';
+        fmPathBar.textContent = `/${folderName}`;
+        fmGrid.innerHTML = 'Loading...';
+
+        let items = [];
+        if (folderName === 'posts') {
+            if (postsManifest.length === 0) await fetchPostsManifest();
+            items = postsManifest.map(p => ({ name: p.name, type: 'file' }));
+        } else if (folderName === 'repo') {
+            // Fetch repos
+             try {
+                const repos = await fetchGitHubApi(`https://api.github.com/users/robertovacirca/repos`);
+                items = repos.map(r => ({ name: r.name, type: 'dir' }));
+            } catch (err) {
+                fmGrid.innerHTML = `Error: ${err.message}`;
+                return;
+            }
+        }
+
+        renderFileManagerItems(items, folderName);
+    }
+
+    function renderFileManagerItems(items, currentPath) {
+        fmGrid.innerHTML = '';
+        items.forEach(item => {
+            const el = document.createElement('div');
+            el.className = 'fm-item';
+            el.innerHTML = `
+                <div class="fm-item-icon">${item.type === 'dir' ? '📁' : '📄'}</div>
+                <div class="fm-item-name">${item.name}</div>
+            `;
+            el.addEventListener('dblclick', async () => {
+                if (item.type === 'file') {
+                    // Open in Terminal Nano
+                    fileManager.style.display = 'none';
+                    windowContainer.style.display = 'flex';
+                    dockDot.style.display = 'block';
+
+                    // Run nano command
+                    const cmd = `nano ${currentPath}/${item.name}`;
+                    await processCommand(cmd);
+                    createNewInputLine();
+                } else if (item.type === 'dir') {
+                    // Enter directory (for repos)
+                    openFileManagerRepoSub(currentPath, item.name);
+                }
+            });
+            fmGrid.appendChild(el);
+        });
+    }
+
+    async function openFileManagerRepoSub(parent, repoName) {
+        fmPathBar.textContent = `/${parent}/${repoName}`;
+        fmGrid.innerHTML = 'Loading...';
+        try {
+            const contents = await fetchGitHubApi(`https://api.github.com/repos/robertovacirca/${repoName}/contents`);
+            const items = contents.map(c => ({ name: c.name, type: c.type }));
+            renderFileManagerItems(items, `repo/${repoName}`);
+        } catch (err) {
+            fmGrid.innerHTML = 'Error loading repo.';
+        }
+    }
+
+    // Refactored Drag Logic to be reusable
+    function makeDraggable(element, handle) {
+        let isDraggingLocal = false;
+        let startX, startY, startLeft, startTop;
+
+        handle.addEventListener('mousedown', (e) => {
+            if (e.target.closest('.window-controls') || e.target.closest('.fm-controls')) return;
+            isDraggingLocal = true;
+            element.classList.add('dragging');
+
+            // Transform fix
+            const style = window.getComputedStyle(element);
+            if (style.transform !== 'none' && style.transform !== '') {
+                const rect = element.getBoundingClientRect();
+                element.style.transform = 'none';
+                element.style.left = `${rect.left}px`;
+                element.style.top = `${rect.top}px`;
+            }
+
+            startX = e.clientX;
+            startY = e.clientY;
+            startLeft = parseInt(element.style.left || 0, 10);
+            startTop = parseInt(element.style.top || 0, 10);
+             if (isNaN(startLeft)) startLeft = element.offsetLeft;
+             if (isNaN(startTop)) startTop = element.offsetTop;
+
+            const onMouseMove = (ev) => {
+                if (!isDraggingLocal) return;
+                ev.preventDefault();
+                const dx = ev.clientX - startX;
+                const dy = ev.clientY - startY;
+                element.style.left = `${startLeft + dx}px`;
+                element.style.top = `${startTop + dy}px`;
+            };
+
+            const onMouseUp = () => {
+                isDraggingLocal = false;
+                element.classList.remove('dragging');
+                document.removeEventListener('mousemove', onMouseMove);
+                document.removeEventListener('mouseup', onMouseUp);
+            };
+
+            document.addEventListener('mousemove', onMouseMove);
+            document.addEventListener('mouseup', onMouseUp);
+        });
+    }
+
+    // Apply makeDraggable to main window
+    makeDraggable(windowContainer, titleBar);
+
+    let isDragging = false;
+    let initialX, initialY, initialLeft, initialTop;
+
     let commandHistory = [];
     let historyIndex = -1;
     let postsManifest = [];
