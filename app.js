@@ -1001,6 +1001,11 @@ document.addEventListener('DOMContentLoaded', () => {
         if (!currentView) return; 
         const key = e.key.toLowerCase();
 
+        if (currentView === 'tui') {
+            handleTuiNavigation(e);
+            return;
+        }
+
         if (key === 'q' && ['less', 'vi', 'nano'].includes(currentView)) {
             e.preventDefault(); showTerminalFromModal();
         } else if (currentView === 'less') { 
