@@ -8,6 +8,170 @@ document.addEventListener('DOMContentLoaded', () => {
     const modalContent = document.getElementById('modal-content');
     const modalFooter = document.getElementById('modal-footer');
 
+    // Window Dragging Logic
+    const windowContainer = document.getElementById('window-container');
+    const titleBar = document.getElementById('window-title-bar');
+    const windowControls = document.querySelector('.window-controls');
+
+    // Desktop & Dock Logic
+    const dockTerminal = document.getElementById('dock-terminal');
+    const dockDot = dockTerminal.querySelector('.dock-dot');
+
+    // Toggle Terminal Visibility
+    windowControls.querySelector('.close').addEventListener('click', () => {
+        windowContainer.style.display = 'none';
+        dockDot.style.display = 'none';
+    });
+
+    dockTerminal.addEventListener('click', () => {
+        if (windowContainer.style.display === 'none') {
+            windowContainer.style.display = 'flex';
+            dockDot.style.display = 'block';
+            attemptFocus(activeCommandInput);
+        } else {
+            attemptFocus(activeCommandInput);
+        }
+    });
+
+    // File Manager Logic
+    const fileManager = document.getElementById('file-manager');
+    const fmClose = fileManager.querySelector('.fm-control.close');
+    const fmGrid = document.getElementById('fm-files-grid');
+    const fmPathBar = document.getElementById('fm-path-bar');
+    const desktopIcons = document.querySelectorAll('.desktop-icon');
+
+    fmClose.addEventListener('click', () => {
+        fileManager.style.display = 'none';
+    });
+
+    // Make File Manager Draggable too
+    const fmTitleBar = fileManager.querySelector('.fm-title-bar');
+    makeDraggable(fileManager, fmTitleBar);
+
+    desktopIcons.forEach(icon => {
+        icon.addEventListener('click', () => {
+            const name = icon.dataset.name; // 'posts' or 'repo'
+            openFileManager(name);
+        });
+    });
+
+    async function openFileManager(folderName) {
+        fileManager.style.display = 'flex';
+        fmPathBar.textContent = `/${folderName}`;
+        fmGrid.innerHTML = 'Loading...';
+
+        let items = [];
+        if (folderName === 'posts') {
+            if (postsManifest.length === 0) await fetchPostsManifest();
+            items = postsManifest.map(p => ({ name: p.name, type: 'file' }));
+        } else if (folderName === 'repo') {
+            // Fetch repos
+             try {
+                const repos = await fetchGitHubApi(`https://api.github.com/users/robertovacirca/repos`);
+                items = repos.map(r => ({ name: r.name, type: 'dir' }));
+            } catch (err) {
+                fmGrid.innerHTML = `Error: ${err.message}`;
+                return;
+            }
+        }
+
+        renderFileManagerItems(items, folderName);
+    }
+
+    function renderFileManagerItems(items, currentPath) {
+        fmGrid.innerHTML = '';
+        items.forEach(item => {
+            const el = document.createElement('div');
+            el.className = 'fm-item';
+            el.innerHTML = `
+                <div class="fm-item-icon">${item.type === 'dir' ? '📁' : '📄'}</div>
+                <div class="fm-item-name">${item.name}</div>
+            `;
+            el.addEventListener('dblclick', async () => {
+                if (item.type === 'file') {
+                    // Open in Terminal Nano
+                    fileManager.style.display = 'none';
+                    windowContainer.style.display = 'flex';
+                    dockDot.style.display = 'block';
+
+                    // Run nano command
+                    const cmd = `nano ${currentPath}/${item.name}`;
+                    await processCommand(cmd);
+                    createNewInputLine();
+                } else if (item.type === 'dir') {
+                    // Enter directory (for repos)
+                    openFileManagerRepoSub(currentPath, item.name);
+                }
+            });
+            fmGrid.appendChild(el);
+        });
+    }
+
+    async function openFileManagerRepoSub(parent, repoName) {
+        fmPathBar.textContent = `/${parent}/${repoName}`;
+        fmGrid.innerHTML = 'Loading...';
+        try {
+            const contents = await fetchGitHubApi(`https://api.github.com/repos/robertovacirca/${repoName}/contents`);
+            const items = contents.map(c => ({ name: c.name, type: c.type }));
+            renderFileManagerItems(items, `repo/${repoName}`);
+        } catch (err) {
+            fmGrid.innerHTML = 'Error loading repo.';
+        }
+    }
+
+    // Refactored Drag Logic to be reusable
+    function makeDraggable(element, handle) {
+        let isDraggingLocal = false;
+        let startX, startY, startLeft, startTop;
+
+        handle.addEventListener('mousedown', (e) => {
+            if (e.target.closest('.window-controls') || e.target.closest('.fm-controls')) return;
+            isDraggingLocal = true;
+            element.classList.add('dragging');
+
+            // Transform fix
+            const style = window.getComputedStyle(element);
+            if (style.transform !== 'none' && style.transform !== '') {
+                const rect = element.getBoundingClientRect();
+                element.style.transform = 'none';
+                element.style.left = `${rect.left}px`;
+                element.style.top = `${rect.top}px`;
+            }
+
+            startX = e.clientX;
+            startY = e.clientY;
+            startLeft = parseInt(element.style.left || 0, 10);
+            startTop = parseInt(element.style.top || 0, 10);
+             if (isNaN(startLeft)) startLeft = element.offsetLeft;
+             if (isNaN(startTop)) startTop = element.offsetTop;
+
+            const onMouseMove = (ev) => {
+                if (!isDraggingLocal) return;
+                ev.preventDefault();
+                const dx = ev.clientX - startX;
+                const dy = ev.clientY - startY;
+                element.style.left = `${startLeft + dx}px`;
+                element.style.top = `${startTop + dy}px`;
+            };
+
+            const onMouseUp = () => {
+                isDraggingLocal = false;
+                element.classList.remove('dragging');
+                document.removeEventListener('mousemove', onMouseMove);
+                document.removeEventListener('mouseup', onMouseUp);
+            };
+
+            document.addEventListener('mousemove', onMouseMove);
+            document.addEventListener('mouseup', onMouseUp);
+        });
+    }
+
+    // Apply makeDraggable to main window
+    makeDraggable(windowContainer, titleBar);
+
+    let isDragging = false;
+    let initialX, initialY, initialLeft, initialTop;
+
     let commandHistory = [];
     let historyIndex = -1;
     let postsManifest = [];
@@ -18,10 +182,15 @@ document.addEventListener('DOMContentLoaded', () => {
 
     let userRepoNamesCache = null; // Cache for GitHub repository names
     let repoContentsCache = {};   // Cache for contents of repository paths
+    let currentUser = localStorage.getItem('username') || 'guest';
+    let currentTheme = localStorage.getItem('theme') || 'default';
 
     // TUI specific variables
     let tuiSidebarItems = [];
+    let tuiMainItems = [];
     let currentTuiFocusIndex = -1;
+    let currentTuiMainFocusIndex = -1;
+    let tuiFocusArea = 'sidebar'; // 'sidebar' or 'main'
     let isTuiSidebarPopulated = false;
     let tuiStatusBarElement = null;
     let tuiSidebarElement = null; // Will hold reference to #tui-sidebar
@@ -132,8 +301,23 @@ document.addEventListener('DOMContentLoaded', () => {
         sl: { description: "Steam Locomotive. A bit of fun!", usage: "sl", details: "Displays a delightful steam locomotive animation." },
         cowsay: { description: "Display an ASCII cow saying a message.", usage: "cowsay <message>", details: "The cow will say whatever message you provide." },
         sudo: { description: "Execute a command as another user (simulated)." },
-        toggletui: { description: "Toggle between CLI and TUI mode.", usage: "toggletui" }
+        toggletui: { description: "Toggle between CLI and TUI mode.", usage: "toggletui" },
+        theme: { description: "Change the terminal theme.", usage: "theme [default|dracula|macos|ubuntu]", details: "Changes the color scheme of the terminal window." },
+        login: { description: "Log in as a user.", usage: "login <username>", details: "Changes the current user prompt." },
+        email: { description: "Display email address.", usage: "email" },
+        contact: { description: "Display contact information.", usage: "contact" },
+        resume: { description: "Display my resume.", usage: "resume" }
     };
+
+    function applyTheme(themeName) {
+        document.body.className = ''; // Reset body classes
+        if (themeName && themeName !== 'default') {
+            document.body.classList.add(`theme-${themeName}`);
+        }
+        localStorage.setItem('theme', themeName || 'default');
+        currentTheme = themeName || 'default';
+        displayOutput(`Theme set to ${currentTheme}.`, 'success');
+    }
 
     const commands = {
         help: () => {
@@ -290,7 +474,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 addCopyButtonsToCodeBlocks(tempRenderDiv); // Pass the element containing <pre> tags
                 
                 displayOutput(tempRenderDiv.innerHTML, 'rawhtml'); // Output the whole processed content
-            } catch (error) { displayOutput(`cat: ${filename}: ${error.message}`, 'error'); }
+            } catch (error) { displayOutput(`cat: ${filenameInput}: ${error.message}`, 'error'); }
         },
         less: async (args) => {
             if (args.length === 0) { displayOutput("Usage: less <filename>", 'error'); return; }
@@ -326,9 +510,9 @@ document.addEventListener('DOMContentLoaded', () => {
                 modalContentWrapper.classList.remove('vi-mode', 'nano-mode');
                 modalNanoHeader.style.display = 'none';
                 modalContent.innerHTML = tempRenderDiv.innerHTML; // Set modal content
-                modalFooter.innerHTML = `${filename} (Press 'q' to quit, Arrows/PgUp/PgDn/Home/End/Space to scroll)`;
+                modalFooter.innerHTML = `${filenameInput} (Press 'q' to quit, Arrows/PgUp/PgDn/Home/End/Space to scroll)`;
                 modalView.style.display = 'flex'; modalContent.scrollTop = 0; if(activeCommandInput) activeCommandInput.disabled = true;
-            } catch (error) { displayOutput(`less: ${filename}: ${error.message}`, 'error'); if(activeCommandInput) activeCommandInput.disabled = false; }
+            } catch (error) { displayOutput(`less: ${filenameInput}: ${error.message}`, 'error'); if(activeCommandInput) activeCommandInput.disabled = false; }
         },
         vi: async (args) => {
             if (args.length === 0) { displayOutput("Usage: vi <filename>", 'error'); return; }
@@ -358,14 +542,14 @@ document.addEventListener('DOMContentLoaded', () => {
                 modalNanoHeader.style.display = 'none';
                 modalContent.innerHTML = `<div style="white-space: pre;">${viFormattedContent}</div>`;
                 
-                modalFooter.innerHTML = `"${filename}" [readonly] (Press 'q' to quit)`;
+                modalFooter.innerHTML = `"${filenameInput}" [readonly] (Press 'q' to quit)`;
                 const copyAllButton = document.createElement('button');
                 copyAllButton.textContent = 'Copy All'; copyAllButton.className = 'modal-copy-all-button';
                 copyAllButton.onclick = (e) => { e.stopPropagation(); navigator.clipboard.writeText(textContent).then(() => { copyAllButton.textContent = 'Copied!'; copyAllButton.classList.add('copied'); setTimeout(()=> { copyAllButton.textContent='Copy All'; copyAllButton.classList.remove('copied');}, 2000);}).catch(err => { console.error('Failed to copy (vi):', err); copyAllButton.textContent = 'Error!'; copyAllButton.classList.add('error'); setTimeout(()=> { copyAllButton.textContent='Copy All'; copyAllButton.classList.remove('error');}, 2000);}); };
                 modalFooter.appendChild(copyAllButton);
 
                 modalView.style.display = 'flex'; modalContent.scrollTop = 0; if(activeCommandInput) activeCommandInput.disabled = true;
-            } catch (error) { displayOutput(`vi: ${filename}: ${error.message}`, 'error'); if(activeCommandInput) activeCommandInput.disabled = false; }
+            } catch (error) { displayOutput(`vi: ${filenameInput}: ${error.message}`, 'error'); if(activeCommandInput) activeCommandInput.disabled = false; }
         },
         nano: async (args) => {
             if (args.length === 0) { displayOutput("Usage: nano <filename>", 'error'); return; }
@@ -389,9 +573,17 @@ document.addEventListener('DOMContentLoaded', () => {
                 const textContent = await response.text();
                 currentView = 'nano';
                 modalContentWrapper.classList.add('nano-mode'); modalContentWrapper.classList.remove('vi-mode', 'less-mode');
-                modalNanoHeader.textContent = `GNU nano (simulated)  File: ${filename}`;
+                modalNanoHeader.textContent = `GNU nano (simulated)  File: ${filenameInput}`;
                 modalNanoHeader.style.display = 'block';
-                modalContent.innerHTML = `<div style="white-space: pre;">${escapeHtml(textContent)}</div>`;
+
+                // Rendered Markdown for Nano as requested
+                const markdownContainer = document.createElement('div');
+                markdownContainer.className = 'markdown-content';
+                markdownContainer.innerHTML = marked.parse(textContent);
+                modalContent.innerHTML = '';
+                modalContent.appendChild(markdownContainer);
+                modalContent.querySelectorAll('pre code').forEach(hljs.highlightElement);
+                addCopyButtonsToCodeBlocks(modalContent);
 
                 modalFooter.innerHTML = `^X Exit (Press 'q' to quit)`;
                 const copyAllButton = document.createElement('button');
@@ -400,7 +592,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 modalFooter.appendChild(copyAllButton);
                 
                 modalView.style.display = 'flex'; modalContent.scrollTop = 0; if(activeCommandInput) activeCommandInput.disabled = true;
-            } catch (error) { displayOutput(`nano: ${filename}: ${error.message}`, 'error'); if(activeCommandInput) activeCommandInput.disabled = false; }
+            } catch (error) { displayOutput(`nano: ${filenameInput}: ${error.message}`, 'error'); if(activeCommandInput) activeCommandInput.disabled = false; }
         },
         sl: async () => {
             const trainFrames = [
@@ -503,6 +695,44 @@ document.addEventListener('DOMContentLoaded', () => {
         sudo: (args) => { 
             if(args.join(' ')==='rm -rf /'){displayOutput("Nice try... But this is a client-side simulation! 😉",'error');}else{displayOutput("sudo: you are not the superuser here.",'error');}
         },
+        theme: (args) => {
+            if (args.length === 0) {
+                displayOutput("Usage: theme [default|dracula|macos|ubuntu]", 'error');
+                return;
+            }
+            const themeName = args[0].toLowerCase();
+            const validThemes = ['default', 'dracula', 'macos', 'ubuntu'];
+            if (validThemes.includes(themeName)) {
+                applyTheme(themeName);
+            } else {
+                displayOutput(`Invalid theme. Available: ${validThemes.join(', ')}`, 'error');
+            }
+        },
+        login: (args) => {
+            if (args.length === 0) {
+                displayOutput("Usage: login <username>", 'error');
+                return;
+            }
+            currentUser = args[0];
+            localStorage.setItem('username', currentUser);
+            displayOutput(`Logged in as ${currentUser}.`);
+            // Refresh prompt if input line exists
+            if (currentInputLineDiv) {
+                const promptSpan = currentInputLineDiv.querySelector('.prompt');
+                if (promptSpan) promptSpan.textContent = `${currentUser}@terminal:~$`;
+            }
+        },
+        email: () => {
+            displayOutput("me@example.com");
+        },
+        contact: () => {
+            displayOutput("Email: me@example.com");
+            displayOutput("GitHub: https://github.com/robertovacirca");
+            displayOutput("Twitter: @robertovacirca");
+        },
+        resume: async () => {
+            await commands.cat(['posts/resume.md']);
+        },
         toggletui: () => {
             const tuiModeContainer = document.getElementById('tui-mode-container');
             if (!terminal || !tuiModeContainer) {
@@ -525,14 +755,12 @@ document.addEventListener('DOMContentLoaded', () => {
                     populateTuiSidebar();
                 }
 
+                tuiFocusArea = 'sidebar';
                 if (tuiSidebarItems.length > 0) {
-                    // currentTuiFocusIndex will be set by the focus event in populateTuiSidebar
-                    // or by keyboard navigation. For initial population, focus the first item.
                     tuiSidebarItems[0].focus(); 
                 } else {
                     updateTuiStatusBar("Sidebar is empty or not populated.");
                 }
-                // displayOutput("Switched to TUI mode. Type 'toggletui' to switch back.", "success"); // Status bar handles this
             } else {
                 // Switch back to CLI mode
                 tuiModeContainer.style.display = 'none';
@@ -911,7 +1139,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
         const promptSpan = document.createElement('span');
         promptSpan.className = 'prompt';
-        promptSpan.textContent = 'guest@terminal:~$';
+        promptSpan.textContent = `${currentUser}@terminal:~$`;
         currentInputLineDiv.appendChild(promptSpan);
 
         activeCommandInput = document.createElement('input');
@@ -931,6 +1159,11 @@ document.addEventListener('DOMContentLoaded', () => {
     function handleGlobalKeyPress(e) { 
         if (!currentView) return; 
         const key = e.key.toLowerCase();
+
+        if (currentView === 'tui') {
+            handleTuiNavigation(e);
+            return;
+        }
 
         if (key === 'q' && ['less', 'vi', 'nano'].includes(currentView)) {
             e.preventDefault(); showTerminalFromModal();
@@ -961,52 +1194,139 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
+    async function updateTuiMainContent(category) {
+        if (!tuiMainOutputElement) tuiMainOutputElement = document.getElementById('tui-main-output');
+        tuiMainOutputElement.innerHTML = ''; // Clear
+        tuiMainItems = [];
+        currentTuiMainFocusIndex = -1;
+
+        if (category === 'Posts') {
+            if (postsManifest.length > 0) {
+                postsManifest.forEach(post => {
+                    const item = document.createElement('div');
+                    item.className = 'tui-file-item';
+                    item.innerHTML = `<span class="icon">📄</span> ${post.name} <span class="meta">(${post.size}b)</span>`;
+                    item.tabIndex = 0;
+
+                    item.addEventListener('click', () => item.focus());
+                    item.addEventListener('focus', () => {
+                        currentTuiMainFocusIndex = tuiMainItems.indexOf(item);
+                        tuiFocusArea = 'main';
+                        updateTuiStatusBar(`Press Enter to read ${post.name}`);
+                    });
+                    item.addEventListener('keydown', async (e) => {
+                        if (e.key === 'Enter') {
+                            e.preventDefault();
+                            await commands.less(['posts/' + post.name]);
+                        }
+                    });
+
+                    tuiMainOutputElement.appendChild(item);
+                    tuiMainItems.push(item);
+                });
+            } else {
+                tuiMainOutputElement.innerHTML = '<div style="padding:10px">No posts found.</div>';
+            }
+        } else if (category === 'Projects') {
+            tuiMainOutputElement.innerHTML = '<div style="padding:10px">Loading repositories...</div>';
+            try {
+                const repos = await fetchGitHubApi(`https://api.github.com/users/robertovacirca/repos`);
+                tuiMainOutputElement.innerHTML = ''; // Clear loading
+                if (Array.isArray(repos) && repos.length > 0) {
+                     repos.sort((a, b) => new Date(b.pushed_at) - new Date(a.pushed_at));
+                     repos.forEach(repo => {
+                        const item = document.createElement('div');
+                        item.className = 'tui-file-item';
+                        item.innerHTML = `<span class="icon">📦</span> ${repo.name} <span class="meta">★${repo.stargazers_count}</span>`;
+                        item.tabIndex = 0;
+
+                        item.addEventListener('click', () => item.focus());
+                        item.addEventListener('focus', () => {
+                            currentTuiMainFocusIndex = tuiMainItems.indexOf(item);
+                            tuiFocusArea = 'main';
+                            updateTuiStatusBar(`Press Enter to view files in ${repo.name}`);
+                        });
+                        item.addEventListener('keydown', async (e) => {
+                             if (e.key === 'Enter') {
+                                e.preventDefault();
+                                // Navigate into repo - simplified for now: just list root files in CLI style
+                                // A better TUI approach would be to update the Main View with the repo files.
+                                // For now, let's use the existing file manager logic or just commands.
+                                // Let's open the File Manager window for this repo!
+                                const fileManager = document.getElementById('file-manager');
+                                const windowContainer = document.getElementById('window-container');
+                                if (fileManager) {
+                                    // We need to access openFileManager from here. It's in the closure of DOMContentLoaded.
+                                    // Since updateTuiMainContent is also inside, we can call it if we find it.
+                                    // Wait, openFileManager is defined in the upper scope.
+                                    // We can just call it? Yes, we can.
+                                    // But we need to switch view logic?
+                                    // Let's just use commands.lsrepos for now to keep it simple and within TUI/CLI feel.
+                                    // Or better: Re-use the TUI main area to show repo contents!
+                                    // But that requires managing "back" navigation state which is complex for this step.
+                                    // Let's trigger the `lsrepos` command which outputs to the terminal (CLI).
+                                    // But we are in TUI mode (overlay). The CLI output is behind.
+                                    // Let's use the Modal View to show file list? No.
+                                    // Let's toggle TUI off and run command?
+                                    // "Press Enter to view files..." -> Switch to CLI and run ls repo/<name>
+                                    commands.toggletui(); // Switch to CLI
+                                    await processCommand(`ls repo/${repo.name}`);
+                                }
+                             }
+                        });
+                        tuiMainOutputElement.appendChild(item);
+                        tuiMainItems.push(item);
+                     });
+                } else {
+                    tuiMainOutputElement.innerHTML = '<div style="padding:10px">No repositories found.</div>';
+                }
+            } catch (err) {
+                 tuiMainOutputElement.innerHTML = `<div style="padding:10px; color:red">Error: ${err.message}</div>`;
+            }
+        } else if (category === 'About') {
+            tuiMainOutputElement.innerHTML = `
+                <div style="padding: 20px; line-height: 1.6;">
+                    <h2>About Me</h2>
+                    <p>Hello! I'm a passionate software engineer who loves terminals and web technologies.</p>
+                    <p>This portfolio is built to simulate a bash environment inside your browser.</p>
+                    <br>
+                    <h3>Contact</h3>
+                    <p>Email: me@example.com</p>
+                    <p>GitHub: <a href="https://github.com/robertovacirca" target="_blank" style="color:inherit">@robertovacirca</a></p>
+                </div>
+            `;
+        }
+    }
+
     function populateTuiSidebar() {
         if (isTuiSidebarPopulated) return;
 
         if (!tuiSidebarElement) tuiSidebarElement = document.getElementById('tui-sidebar');
         if (!tuiMainOutputElement) tuiMainOutputElement = document.getElementById('tui-main-output');
-        // Ensure tuiStatusBarElement is assigned (it's used in updateTuiStatusBar)
         if (!tuiStatusBarElement) tuiStatusBarElement = document.getElementById('tui-status-bar');
 
+        if (!tuiSidebarElement) return;
 
-        if (!tuiSidebarElement) {
-            console.error("TUI Sidebar element not found!");
-            return;
-        }
+        tuiSidebarElement.innerHTML = '';
+        tuiSidebarItems = [];
 
-        tuiSidebarElement.innerHTML = ''; // Clear any existing items
-        tuiSidebarItems = []; // Reset the array
+        const categories = ['Posts', 'Projects', 'About'];
 
-        Object.keys(commandHelp).sort().forEach((command) => {
+        categories.forEach((cat) => {
             const item = document.createElement('div');
             item.className = 'tui-sidebar-item';
-            item.textContent = command;
-            item.tabIndex = 0; // Make it focusable
+            item.textContent = cat;
+            item.tabIndex = 0;
 
             item.addEventListener('click', () => {
-                item.focus(); // Focus will trigger the 'focus' listener below
+                item.focus();
             });
             
             item.addEventListener('focus', () => {
-                // Update currentTuiFocusIndex when an item receives focus
                 currentTuiFocusIndex = tuiSidebarItems.indexOf(item);
-                updateTuiStatusBar(`Selected: ${command} - ${commandHelp[command].description}`);
-            });
-            
-            item.addEventListener('keydown', (e) => { 
-                if (e.key === 'Enter') {
-                    e.preventDefault();
-                    if (!tuiMainOutputElement) tuiMainOutputElement = document.getElementById('tui-main-output'); // Ensure it's assigned
-                    
-                    if (tuiMainOutputElement) {
-                        tuiMainOutputElement.textContent += `\n> ${command}\n`;
-                        // Simulate command execution for now
-                        tuiMainOutputElement.textContent += `Executed: ${command}. (Output would appear here)\n`;
-                        tuiMainOutputElement.scrollTop = tuiMainOutputElement.scrollHeight; // Scroll to bottom
-                    }
-                    updateTuiStatusBar(`Executed: ${command}`);
-                }
+                tuiFocusArea = 'sidebar';
+                updateTuiStatusBar(`Viewing ${cat}`);
+                updateTuiMainContent(cat);
             });
 
             tuiSidebarItems.push(item);
@@ -1014,8 +1334,54 @@ document.addEventListener('DOMContentLoaded', () => {
         });
         isTuiSidebarPopulated = true;
     }
+
+    function handleTuiNavigation(e) {
+        if (currentView !== 'tui') return;
+
+        if (e.key === 'ArrowDown') {
+            e.preventDefault();
+            if (tuiFocusArea === 'sidebar') {
+                const nextIndex = Math.min(currentTuiFocusIndex + 1, tuiSidebarItems.length - 1);
+                if (tuiSidebarItems[nextIndex]) tuiSidebarItems[nextIndex].focus();
+            } else if (tuiFocusArea === 'main') {
+                if (tuiMainItems.length > 0) {
+                    const nextIndex = Math.min(currentTuiMainFocusIndex + 1, tuiMainItems.length - 1);
+                    if (tuiMainItems[nextIndex]) tuiMainItems[nextIndex].focus();
+                }
+            }
+        } else if (e.key === 'ArrowUp') {
+            e.preventDefault();
+            if (tuiFocusArea === 'sidebar') {
+                const prevIndex = Math.max(currentTuiFocusIndex - 1, 0);
+                if (tuiSidebarItems[prevIndex]) tuiSidebarItems[prevIndex].focus();
+            } else if (tuiFocusArea === 'main') {
+                if (tuiMainItems.length > 0) {
+                    const prevIndex = Math.max(currentTuiMainFocusIndex - 1, 0);
+                    if (tuiMainItems[prevIndex]) tuiMainItems[prevIndex].focus();
+                }
+            }
+        } else if (e.key === 'ArrowRight') {
+            e.preventDefault();
+            if (tuiFocusArea === 'sidebar' && tuiMainItems.length > 0) {
+                // Focus first item in main
+                tuiMainItems[0].focus();
+            }
+        } else if (e.key === 'ArrowLeft') {
+            e.preventDefault();
+            if (tuiFocusArea === 'main') {
+                // Focus current item in sidebar
+                if (tuiSidebarItems[currentTuiFocusIndex]) tuiSidebarItems[currentTuiFocusIndex].focus();
+            }
+        } else if (e.key === 'Escape') {
+            // Restore file list if we were viewing content in CAT?
+            // For now, assume we just use Left to go back to Sidebar.
+        }
+    }
     
     async function init() {
+        // Apply saved theme
+        applyTheme(currentTheme);
+
         outputContainer.innerHTML = '';
         await fetchPostsManifest();
 
@@ -1140,6 +1506,10 @@ document.addEventListener('DOMContentLoaded', () => {
     
 
     async function handleCommandInputKeydown(e) {
+        // TUI navigation is now handled by handleGlobalKeyPress or focused elements
+        if (currentView === 'tui') {
+            return;
+        }
         if (currentView || !activeCommandInput) return;
 
         if (slInterval && e.key.toLowerCase() !== 'c' && !e.ctrlKey) {
@@ -1256,8 +1626,11 @@ document.addEventListener('DOMContentLoaded', () => {
             }
             // Scenario 2: Completing arguments for a command
             else if (parts.length >= 1 && commandName) { // Command name is present or fully typed
-                const argIndex = currentInputValue.endsWith(" ") ? parts.length : parts.length - 1; // Keep only one
-                const currentArgText = currentInputValue.endsWith(" ") ? "" : parts[parts.length - 1];
+                // When split by space, if input ends with space, the last part is empty string.
+                // This empty string represents the new argument we are about to type.
+                // So the index of the argument we are completing is always the last index of parts.
+                const argIndex = parts.length - 1;
+                const currentArgText = parts[argIndex];
 
                 // Ensure commandName is valid before proceeding with argument completion
                 if (commandName && commands[commandName]) {

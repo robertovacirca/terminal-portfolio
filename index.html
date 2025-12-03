@@ -16,33 +16,79 @@
     <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/lua.min.js"></script>
 </head>
 <body>
-    <div id="terminal">
-        <div id="output-container">
+    <div id="desktop-environment">
+        <div id="top-bar">
+            <div id="activities">Activities</div>
+            <div id="clock">Oct 26 12:00</div>
+            <div id="status-area">🔋 📶 🔈</div>
+        </div>
+        <div id="desktop-icons">
+            <div class="desktop-icon" data-name="posts" data-type="folder">
+                <div class="icon-img">📁</div>
+                <div class="icon-label">Posts</div>
+            </div>
+            <div class="desktop-icon" data-name="repo" data-type="folder">
+                <div class="icon-img">🌐</div>
+                <div class="icon-label">Repo</div>
             </div>
         </div>
+        <div id="dock">
+            <div class="dock-item" id="dock-terminal" title="Terminal">
+                <div class="dock-icon">>_</div>
+                <div class="dock-dot"></div>
+            </div>
+        </div>
+    </div>
+
+    <div id="file-manager" class="window-hidden" style="display: none;">
+        <div class="fm-title-bar">
+            <div class="fm-controls">
+                <div class="fm-control close"></div>
+            </div>
+            <div class="fm-title">File Manager</div>
+        </div>
+        <div class="fm-content">
+            <div id="fm-path-bar">/</div>
+            <div id="fm-files-grid"></div>
+        </div>
+    </div>
+
+    <div id="window-container">
+        <div id="window-title-bar">
+            <div class="window-controls">
+                <div class="control close"></div>
+                <div class="control minimize"></div>
+                <div class="control maximize"></div>
+            </div>
+            <div class="window-title">Terminal Blog</div>
+        </div>
+        <div id="terminal">
+            <div id="output-container"></div>
+        </div>
+
+        <div id="tui-mode-container" style="display: none;">
+            <div id="tui-sidebar">
+                <!-- Command list or file navigation will go here -->
+            </div>
+            <div id="tui-main-area"> <!-- Wrapper for main output and input -->
+                <div id="tui-main-output">
+                    <!-- Command output will go here -->
+                </div>
+                <div id="tui-input-area">
+                    <!-- Input elements or key capture instructions -->
+                </div>
+            </div>
+            <div id="tui-status-bar">
+                <!-- Status messages will go here -->
+            </div>
+        </div>
+    </div>
 
     <div id="modal-view" class="modal-view" style="display: none;">
         <div class="modal-content-wrapper">
             <div id="modal-nano-header" class="nano-mode modal-header" style="display: none;"></div>
             <div id="modal-content" class="modal-content"></div>
             <div id="modal-footer" class="modal-footer"></div>
-        </div>
-    </div>
-
-    <div id="tui-mode-container" style="display: none;">
-        <div id="tui-sidebar">
-            <!-- Command list or file navigation will go here -->
-        </div>
-        <div id="tui-main-area"> <!-- Wrapper for main output and input -->
-            <div id="tui-main-output">
-                <!-- Command output will go here -->
-            </div>
-            <div id="tui-input-area">
-                <!-- Input elements or key capture instructions -->
-            </div>
-        </div>
-        <div id="tui-status-bar">
-            <!-- Status messages will go here -->
         </div>
     </div>
 
