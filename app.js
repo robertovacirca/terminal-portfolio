@@ -510,39 +510,34 @@ document.addEventListener('DOMContentLoaded', () => {
                 return;
             }
 
-            if (terminal.style.display !== 'none') {
-                // Switch to TUI mode
+            if (terminal.style.display !== 'none') { // Switching TO TUI
                 terminal.style.display = 'none';
-                tuiModeContainer.style.display = 'grid'; // Matches CSS
-                currentView = 'tui'; // Mark that TUI is active
-
-                // Ensure TUI elements are known
-                if (!tuiSidebarElement) tuiSidebarElement = document.getElementById('tui-sidebar');
-                if (!tuiMainOutputElement) tuiMainOutputElement = document.getElementById('tui-main-output');
-                if (!tuiStatusBarElement) tuiStatusBarElement = document.getElementById('tui-status-bar');
-                
-                if (!isTuiSidebarPopulated) {
+                tuiModeContainer.style.display = 'grid'; // Or your chosen display style
+                currentView = 'tui';
+        
+                if (!isTuiSidebarPopulated) { // Check if already populated
                     populateTuiSidebar();
                 }
-
                 if (tuiSidebarItems.length > 0) {
-                    // currentTuiFocusIndex will be set by the focus event in populateTuiSidebar
-                    // or by keyboard navigation. For initial population, focus the first item.
-                    tuiSidebarItems[0].focus(); 
-                } else {
-                    updateTuiStatusBar("Sidebar is empty or not populated.");
+                    // If currentTuiFocusIndex is -1 or invalid, reset to 0
+                    if (currentTuiFocusIndex < 0 || currentTuiFocusIndex >= tuiSidebarItems.length) {
+                        currentTuiFocusIndex = 0;
+                    }
+                    tuiSidebarItems[currentTuiFocusIndex].focus();
                 }
-                // displayOutput("Switched to TUI mode. Type 'toggletui' to switch back.", "success"); // Status bar handles this
-            } else {
-                // Switch back to CLI mode
+                updateTuiStatusBar("Switched to TUI mode. Use Arrow keys to navigate commands."); // Update status
+                document.addEventListener('keydown', handleTuiKeyDown); // ADD THIS
+            } else { // Switching FROM TUI (back to CLI)
                 tuiModeContainer.style.display = 'none';
-                terminal.style.display = ''; // Revert to default (flex)
-                currentView = null; // Mark that CLI is active (or no special view)
+                terminal.style.display = ''; // Revert to default
+                currentView = null;
+                document.removeEventListener('keydown', handleTuiKeyDown); // ADD THIS
                 if (activeCommandInput) {
                     attemptFocus(activeCommandInput);
                 }
-                displayOutput("Switched back to CLI mode.", "success");
+                displayOutput("Switched back to CLI mode."); // This will go to the CLI output
             }
+            // scrollToBottom(); // May or may not be needed depending on TUI scroll behavior
         },
         // New lsrepos command
         lsrepos: async (args) => {
@@ -928,7 +923,29 @@ document.addEventListener('DOMContentLoaded', () => {
         scrollToBottom();
     }
 
+    function handleTuiKeyDown(e) {
+        if (!tuiSidebarItems || tuiSidebarItems.length === 0) return; // No items to navigate
+    
+        if (e.key === 'ArrowDown') {
+            e.preventDefault();
+            currentTuiFocusIndex++;
+            if (currentTuiFocusIndex >= tuiSidebarItems.length) {
+                currentTuiFocusIndex = 0; // Wrap around
+            }
+            tuiSidebarItems[currentTuiFocusIndex].focus();
+        } else if (e.key === 'ArrowUp') {
+            e.preventDefault();
+            currentTuiFocusIndex--;
+            if (currentTuiFocusIndex < 0) {
+                currentTuiFocusIndex = tuiSidebarItems.length - 1; // Wrap around
+            }
+            tuiSidebarItems[currentTuiFocusIndex].focus();
+        }
+        // 'Enter' is handled by the item's own keydown listener.
+    }
+
     function handleGlobalKeyPress(e) { 
+        if (!['less', 'vi', 'nano'].includes(currentView)) return;
         if (!currentView) return; 
         const key = e.key.toLowerCase();
 
@@ -949,6 +966,103 @@ document.addEventListener('DOMContentLoaded', () => {
     function escapeHtml(str) { 
         return String(str).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#039;");
     }
+
+    async function displayTuiFileContent(repoName, filePath) {
+        if (!tuiMainOutputElement) tuiMainOutputElement = document.getElementById('tui-main-output');
+        tuiMainOutputElement.innerHTML = '<div>Loading file...</div>';
+        updateTuiStatusBar(`Displaying: ${repoName}/${filePath}`);
+        tuiMainOutputElement.scrollTop = 0;
+
+        try {
+            const fileContent = await fetchRawGitHubContent('robertovacirca', repoName, filePath);
+            tuiMainOutputElement.innerHTML = ''; // Clear loading message
+
+            const tempRenderDiv = document.createElement('div');
+            const contentContainer = document.createElement('div'); // General container
+
+            if (filePath.toLowerCase().endsWith('.md') || filePath.toLowerCase().endsWith('.markdown')) {
+                contentContainer.className = 'markdown-content';
+                contentContainer.innerHTML = marked.parse(fileContent);
+            } else {
+                // For other file types, display as pre-formatted text
+                const fileExtension = filePath.split('.').pop().toLowerCase();
+                const languageMap = {
+                    'js': 'javascript', 'py': 'python', 'sh': 'bash', 'c': 'c', 'cpp': 'cpp', 
+                    'lua': 'lua', 'ts': 'typescript', 'html': 'html', 'css': 'css', 'json': 'json',
+                    'rb': 'ruby', 'java': 'java', 'php': 'php', 'go': 'go', 'rs': 'rust', 'kt': 'kotlin',
+                    'swift': 'swift', 'yml': 'yaml', 'xml': 'xml'
+                    // Add more mappings as needed
+                };
+                const lang = languageMap[fileExtension] || 'plaintext';
+
+                const pre = document.createElement('pre');
+                const code = document.createElement('code');
+                code.classList.add(`language-${lang}`);
+                code.textContent = fileContent;
+                pre.appendChild(code);
+                contentContainer.appendChild(pre);
+            }
+            
+            tempRenderDiv.appendChild(contentContainer);
+            tempRenderDiv.querySelectorAll('pre code').forEach(hljs.highlightElement);
+            addCopyButtonsToCodeBlocks(tempRenderDiv); // Ensure this works with the new structure
+            
+            tuiMainOutputElement.appendChild(tempRenderDiv); // Append processed content
+
+        } catch (error) {
+            tuiMainOutputElement.innerHTML = `<div class="error">Error loading file ${filePath}: ${error.message}</div>`;
+            updateTuiStatusBar(`Error displaying ${repoName}/${filePath}`);
+        }
+        tuiMainOutputElement.scrollTop = 0;
+    }
+
+    async function displayTuiRepoContents(repoName, pathInRepo = '') {
+        if (!tuiMainOutputElement) tuiMainOutputElement = document.getElementById('tui-main-output');
+        const fullPathDisplay = `${repoName}${pathInRepo ? '/' + pathInRepo : ''}`;
+        tuiMainOutputElement.innerHTML = `<div>Loading contents of ${fullPathDisplay}...</div>`;
+        updateTuiStatusBar(`Listing: ${fullPathDisplay}`);
+        tuiMainOutputElement.scrollTop = 0;
+
+        try {
+            const contents = await fetchGitHubApi(`https://api.github.com/repos/robertovacirca/${repoName}/contents/${pathInRepo}`);
+            tuiMainOutputElement.innerHTML = ''; // Clear loading message
+
+            if (!Array.isArray(contents) || contents.length === 0) {
+                const emptyMsg = document.createElement('div');
+                emptyMsg.textContent = `Directory ${fullPathDisplay} is empty or an error occurred.`;
+                tuiMainOutputElement.appendChild(emptyMsg);
+                return;
+            }
+
+            contents.sort((a, b) => {
+                if (a.type === 'dir' && b.type !== 'dir') return -1;
+                if (a.type !== 'dir' && b.type === 'dir') return 1;
+                return a.name.localeCompare(b.name);
+            }).forEach(item => {
+                const itemDiv = document.createElement('div');
+                itemDiv.className = 'tui-selectable-item tui-repo-content-item';
+                itemDiv.textContent = item.name + (item.type === 'dir' ? '/' : '');
+                itemDiv.dataset.path = item.path;
+                itemDiv.dataset.type = item.type;
+                itemDiv.dataset.reponame = repoName;
+                itemDiv.tabIndex = 0; // Make focusable
+
+                itemDiv.addEventListener('click', () => {
+                    if (item.type === 'dir') {
+                        displayTuiRepoContents(repoName, item.path);
+                    } else if (item.type === 'file') {
+                        displayTuiFileContent(repoName, item.path);
+                    }
+                });
+                tuiMainOutputElement.appendChild(itemDiv);
+            });
+        } catch (error) {
+            tuiMainOutputElement.innerHTML = `<div class="error">Error listing ${fullPathDisplay}: ${error.message}</div>`;
+            updateTuiStatusBar(`Error listing ${fullPathDisplay}`);
+        }
+        tuiMainOutputElement.scrollTop = 0;
+    }
+
 
     function updateTuiStatusBar(message) {
         if (!tuiStatusBarElement) { // Assign if not already assigned
@@ -991,7 +1105,7 @@ document.addEventListener('DOMContentLoaded', () => {
             item.addEventListener('focus', () => {
                 // Update currentTuiFocusIndex when an item receives focus
                 currentTuiFocusIndex = tuiSidebarItems.indexOf(item);
-                updateTuiStatusBar(`Selected: ${command} - ${commandHelp[command].description}`);
+                updateTuiStatusBar(`Command: ${command} - ${commandHelp[command].description}`);
             });
             
             item.addEventListener('keydown', (e) => { 
@@ -1000,12 +1114,562 @@ document.addEventListener('DOMContentLoaded', () => {
                     if (!tuiMainOutputElement) tuiMainOutputElement = document.getElementById('tui-main-output'); // Ensure it's assigned
                     
                     if (tuiMainOutputElement) {
-                        tuiMainOutputElement.textContent += `\n> ${command}\n`;
-                        // Simulate command execution for now
-                        tuiMainOutputElement.textContent += `Executed: ${command}. (Output would appear here)\n`;
-                        tuiMainOutputElement.scrollTop = tuiMainOutputElement.scrollHeight; // Scroll to bottom
+                        if (command === 'help' || command === '?') {
+                            tuiMainOutputElement.innerHTML = ''; // Clear previous output
+
+                            const header = document.createElement('div');
+                            header.textContent = 'Available Commands:';
+                            header.style.fontWeight = 'bold'; // Optional: make header bold
+                            header.style.marginBottom = '5px'; // Optional: space after header
+                            tuiMainOutputElement.appendChild(header);
+
+                            Object.keys(commandHelp).sort().forEach(cmdKey => {
+                                const helpLine = document.createElement('div');
+                                helpLine.textContent = `  ${cmdKey.padEnd(15)} - ${commandHelp[cmdKey].description}`;
+                                tuiMainOutputElement.appendChild(helpLine);
+                            });
+
+                            const manHint = document.createElement('div');
+                            manHint.textContent = "\nUse 'man <command>' for more details.";
+                            manHint.style.marginTop = '10px'; // Optional: space before hint
+                            tuiMainOutputElement.appendChild(manHint);
+
+                            tuiMainOutputElement.scrollTop = 0; // Scroll to top
+                            updateTuiStatusBar(`Displayed help for: ${command}`);
+                        } else if (command === 'man') {
+                            if (!tuiMainOutputElement) tuiMainOutputElement = document.getElementById('tui-main-output');
+                            tuiMainOutputElement.innerHTML = ''; // Clear previous output
+                            
+                            const instructionHeader = document.createElement('div');
+                            instructionHeader.textContent = "Select a command to view its manual page:";
+                            instructionHeader.style.marginBottom = '10px';
+                            tuiMainOutputElement.appendChild(instructionHeader);
+
+                            Object.keys(commandHelp).sort().forEach(cmdKey => {
+                                if (cmdKey === '?' || cmdKey === 'man') return; // Skip '?' and 'man' itself initially
+
+                                const commandDiv = document.createElement('div');
+                                commandDiv.className = 'tui-selectable-item tui-man-topic';
+                                commandDiv.textContent = cmdKey;
+                                commandDiv.dataset.cmdname = cmdKey;
+                                commandDiv.tabIndex = 0; // Make focusable
+
+                                commandDiv.addEventListener('click', (event) => {
+                                    const selectedCmdName = event.currentTarget.dataset.cmdname;
+                                    if (!tuiMainOutputElement) tuiMainOutputElement = document.getElementById('tui-main-output');
+                                    
+                                    tuiMainOutputElement.innerHTML = ''; // Clear list of commands
+                                    updateTuiStatusBar(`Manual: ${selectedCmdName}`);
+
+                                    const helpData = commandHelp[selectedCmdName];
+                                    if (helpData) {
+                                        let manOutput = `<div class="tui-man-page"><strong>NAME</strong>\n    ${selectedCmdName} - ${helpData.description}\n\n`;
+                                        if (helpData.usage) manOutput += `<strong>SYNOPSIS</strong>\n    ${helpData.usage}\n\n`;
+                                        if (helpData.details) manOutput += `<strong>DESCRIPTION</strong>\n    ${helpData.details.replace(/\n/g, '\n    ')}\n`;
+                                        manOutput += `</div>`;
+                                        tuiMainOutputElement.innerHTML = manOutput;
+                                    } else {
+                                        tuiMainOutputElement.innerHTML = `<div>No manual entry for ${selectedCmdName}.</div>`;
+                                    }
+                                    tuiMainOutputElement.scrollTop = 0;
+                                });
+                                tuiMainOutputElement.appendChild(commandDiv);
+                            });
+                            tuiMainOutputElement.scrollTop = 0;
+                            updateTuiStatusBar("man: Select a command from the list.");
+                        } else if (command === 'ls') {
+                            if (!tuiMainOutputElement) tuiMainOutputElement = document.getElementById('tui-main-output');
+                            tuiMainOutputElement.innerHTML = ''; // Clear previous output
+                            updateTuiStatusBar("ls: Select a directory to view or click an item.");
+
+                            const postsDiv = document.createElement('div');
+                            postsDiv.className = 'tui-selectable-item tui-ls-posts-dir'; // For styling and selection
+                            postsDiv.textContent = 'posts/';
+                            postsDiv.tabIndex = 0; // Make focusable for potential keyboard nav later
+                            postsDiv.addEventListener('click', () => {
+                                if (!tuiMainOutputElement) tuiMainOutputElement = document.getElementById('tui-main-output');
+                                tuiMainOutputElement.innerHTML = '';
+                                updateTuiStatusBar("Listing posts...");
+                                if (!postsManifest || postsManifest.length === 0) {
+                                    const noPostsMsg = document.createElement('div');
+                                    noPostsMsg.textContent = "No posts available.";
+                                    tuiMainOutputElement.appendChild(noPostsMsg);
+                                } else {
+                                    postsManifest.sort((a,b) => a.name.localeCompare(b.name)).forEach(post => {
+                                        const postItemDiv = document.createElement('div');
+                                        postItemDiv.className = 'tui-selectable-item tui-post-item';
+                                        postItemDiv.textContent = post.name;
+                                        postItemDiv.dataset.filename = post.name;
+                                        postItemDiv.tabIndex = 0; // Make it focusable
+
+                                        postItemDiv.addEventListener('click', async () => {
+                                            const filename = postItemDiv.dataset.filename;
+                                            if (!tuiMainOutputElement) tuiMainOutputElement = document.getElementById('tui-main-output');
+                                            tuiMainOutputElement.innerHTML = '<div>Loading post...</div>';
+                                            updateTuiStatusBar(`Displaying: ${filename}`);
+                                            try {
+                                                const response = await fetch(`public/posts/${filename}`);
+                                                if (!response.ok) throw new Error(`File not found (status ${response.status})`);
+                                                const markdownContent = await response.text();
+                                                
+                                                const tempRenderDiv = document.createElement('div');
+                                                const markdownContainer = document.createElement('div');
+                                                markdownContainer.className = 'markdown-content';
+                                                markdownContainer.innerHTML = marked.parse(markdownContent);
+                                                tempRenderDiv.appendChild(markdownContainer);
+
+                                                tempRenderDiv.querySelectorAll('pre code').forEach(hljs.highlightElement);
+                                                addCopyButtonsToCodeBlocks(tempRenderDiv);
+                                                
+                                                tuiMainOutputElement.innerHTML = tempRenderDiv.innerHTML;
+                                            } catch (error) {
+                                                tuiMainOutputElement.innerHTML = `<div class="error">Error loading post ${filename}: ${error.message}</div>`;
+                                                updateTuiStatusBar(`Error displaying ${filename}`);
+                                            }
+                                            tuiMainOutputElement.scrollTop = 0;
+                                        });
+                                        tuiMainOutputElement.appendChild(postItemDiv);
+                                    });
+                                }
+                                tuiMainOutputElement.scrollTop = 0;
+                            });
+                            tuiMainOutputElement.appendChild(postsDiv);
+
+                            const reposDiv = document.createElement('div');
+                            reposDiv.className = 'tui-selectable-item tui-ls-repos-dir'; // For styling and selection
+                            reposDiv.textContent = 'repos/';
+                            reposDiv.tabIndex = 0; // Make focusable
+                            reposDiv.addEventListener('click', async () => {
+                                if (!tuiMainOutputElement) tuiMainOutputElement = document.getElementById('tui-main-output');
+                                tuiMainOutputElement.innerHTML = '';
+                                updateTuiStatusBar("Listing repositories...");
+                                const loadingMsg = document.createElement('div');
+                                loadingMsg.textContent = "Loading repositories...";
+                                tuiMainOutputElement.appendChild(loadingMsg);
+                                tuiMainOutputElement.scrollTop = 0;
+
+                                try {
+                                    const repos = await fetchGitHubApi(`https://api.github.com/users/robertovacirca/repos`);
+                                    tuiMainOutputElement.innerHTML = ''; // Clear loading message
+                                    if (!Array.isArray(repos) || repos.length === 0) {
+                                        const noReposMsg = document.createElement('div');
+                                        noReposMsg.textContent = "No public repositories found.";
+                                        tuiMainOutputElement.appendChild(noReposMsg);
+                                    } else {
+                                        repos.sort((a,b) => a.name.localeCompare(b.name)).forEach(repo => {
+                                            const repoItemDiv = document.createElement('div');
+                                            repoItemDiv.className = 'tui-selectable-item tui-repo-item';
+                                            repoItemDiv.textContent = `${repo.name}/`;
+                                            repoItemDiv.dataset.reponame = repo.name;
+                                            repoItemDiv.tabIndex = 0; // Make it focusable
+
+                                repoItemDiv.addEventListener('click', () => { // Removed async here
+                                    const repoNameFromDataset = repoItemDiv.dataset.reponame;
+                                    displayTuiRepoContents(repoNameFromDataset, ''); // Call new refactored function
+                                            });
+                                            tuiMainOutputElement.appendChild(repoItemDiv);
+                                        });
+                                    }
+                                } catch (error) {
+                                    tuiMainOutputElement.innerHTML = ''; // Clear loading message
+                                    const errorMsg = document.createElement('div');
+                                    errorMsg.className = 'error';
+                                    errorMsg.textContent = error.message;
+                                    tuiMainOutputElement.appendChild(errorMsg);
+                                    updateTuiStatusBar("Error fetching repositories.");
+                                }
+                                tuiMainOutputElement.scrollTop = 0;
+                            });
+                            tuiMainOutputElement.appendChild(reposDiv);
+                            
+                            // Focus the first selectable item in the main output if available
+                            const firstSelectable = tuiMainOutputElement.querySelector('.tui-selectable-item');
+                            if (firstSelectable) {
+                                // TODO: Consider if focusing here is desired, or if focus should remain in sidebar
+                                // For now, let focus remain on the 'ls' command in sidebar.
+                                // User will click to navigate into these.
+                            }
+                            updateTuiStatusBar(`TUI: ls - Select a directory.`);
+                        } else if (command === 'cat') {
+                            if (!tuiMainOutputElement) tuiMainOutputElement = document.getElementById('tui-main-output');
+                            tuiMainOutputElement.innerHTML = ''; // Clear previous output
+                            updateTuiStatusBar("Select a post to 'cat':");
+
+                            if (!postsManifest || postsManifest.length === 0) {
+                                const noPostsMsg = document.createElement('div');
+                                noPostsMsg.textContent = "No posts available to 'cat'.";
+                                tuiMainOutputElement.appendChild(noPostsMsg);
+                                return;
+                            }
+
+                            postsManifest.forEach(post => {
+                                const postDiv = document.createElement('div');
+                                postDiv.className = 'tui-selectable-item tui-post-to-cat'; // Add classes
+                                postDiv.textContent = post.name;
+                                postDiv.dataset.filename = post.name; // Store filename
+
+                                postDiv.addEventListener('click', async () => {
+                                    if (!tuiMainOutputElement) tuiMainOutputElement = document.getElementById('tui-main-output');
+                                    tuiMainOutputElement.innerHTML = ''; // Clear post list or previous content
+                                    updateTuiStatusBar(`Displaying: ${post.name}`);
+                                    
+                                    try {
+                                        const response = await fetch(`public/posts/${post.name}`);
+                                        if (!response.ok) throw new Error(`File not found or unreadable (status ${response.status})`);
+                                        const markdownContent = await response.text();
+                                        
+                                        const tempRenderDiv = document.createElement('div');
+                                        const markdownContainer = document.createElement('div');
+                                        markdownContainer.className = 'markdown-content'; // Apply markdown styling
+                                        markdownContainer.innerHTML = marked.parse(markdownContent);
+                                        tempRenderDiv.appendChild(markdownContainer);
+
+                                        tempRenderDiv.querySelectorAll('pre code').forEach(hljs.highlightElement);
+                                        addCopyButtonsToCodeBlocks(tempRenderDiv);
+                                        
+                                        tuiMainOutputElement.innerHTML = tempRenderDiv.innerHTML;
+                                    } catch (error) {
+                                        const errorMsg = document.createElement('div');
+                                        errorMsg.className = 'error'; // Use existing error class
+                                        errorMsg.textContent = `cat: ${post.name}: ${error.message}`;
+                                        tuiMainOutputElement.appendChild(errorMsg);
+                                        updateTuiStatusBar(`Error displaying ${post.name}`);
+                                    }
+                                    tuiMainOutputElement.scrollTop = 0;
+                                });
+                                tuiMainOutputElement.appendChild(postDiv);
+                            });
+                            tuiMainOutputElement.scrollTop = 0;
+
+                        } else if (command === 'less') {
+                            if (!tuiMainOutputElement) tuiMainOutputElement = document.getElementById('tui-main-output');
+                            tuiMainOutputElement.innerHTML = ''; // Clear previous output
+                            updateTuiStatusBar("Select a post for 'less':");
+
+                            if (!postsManifest || postsManifest.length === 0) {
+                                const noPostsMsg = document.createElement('div');
+                                noPostsMsg.textContent = "No posts available for 'less'.";
+                                tuiMainOutputElement.appendChild(noPostsMsg);
+                                return;
+                            }
+
+                            postsManifest.forEach(post => {
+                                const postDiv = document.createElement('div');
+                                postDiv.className = 'tui-selectable-item tui-post-to-less'; 
+                                postDiv.textContent = post.name;
+                                postDiv.dataset.filename = post.name; 
+
+                                postDiv.addEventListener('click', async () => {
+                                    if (!tuiMainOutputElement) tuiMainOutputElement = document.getElementById('tui-main-output');
+                                    tuiMainOutputElement.innerHTML = ''; 
+                                    updateTuiStatusBar(`Viewing (less): ${post.name} - Scroll to navigate (q to exit this view - not yet implemented)`);
+                                    
+                                    try {
+                                        const response = await fetch(`public/posts/${post.name}`);
+                                        if (!response.ok) throw new Error(`File not found or unreadable (status ${response.status})`);
+                                        const markdownContent = await response.text();
+                                        
+                                        const tempRenderDiv = document.createElement('div');
+                                        const markdownContainer = document.createElement('div');
+                                        markdownContainer.className = 'markdown-content'; 
+                                        markdownContainer.innerHTML = marked.parse(markdownContent);
+                                        tempRenderDiv.appendChild(markdownContainer);
+
+                                        tempRenderDiv.querySelectorAll('pre code').forEach(hljs.highlightElement);
+                                        addCopyButtonsToCodeBlocks(tempRenderDiv);
+                                        
+                                        tuiMainOutputElement.innerHTML = tempRenderDiv.innerHTML;
+                                    } catch (error) {
+                                        const errorMsg = document.createElement('div');
+                                        errorMsg.className = 'error'; 
+                                        errorMsg.textContent = `less: ${post.name}: ${error.message}`;
+                                        tuiMainOutputElement.appendChild(errorMsg);
+                                        updateTuiStatusBar(`Error displaying ${post.name} with less`);
+                                    }
+                                    tuiMainOutputElement.scrollTop = 0;
+                                });
+                                tuiMainOutputElement.appendChild(postDiv);
+                            });
+                            tuiMainOutputElement.scrollTop = 0;
+                        } else if (command === 'cowsay') {
+                            if (!tuiMainOutputElement) tuiMainOutputElement = document.getElementById('tui-main-output');
+                            tuiMainOutputElement.innerHTML = '';
+                            const cowsayPlaceholder = document.createElement('div');
+                            cowsayPlaceholder.textContent = "TUI cowsay: Use CLI for cowsay with arguments for now.";
+                            tuiMainOutputElement.appendChild(cowsayPlaceholder);
+                            updateTuiStatusBar("cowsay");
+                            tuiMainOutputElement.scrollTop = 0;
+                        } else if (command === 'sudo') {
+                            if (!tuiMainOutputElement) tuiMainOutputElement = document.getElementById('tui-main-output');
+                            tuiMainOutputElement.innerHTML = '';
+                            const sudoPlaceholder = document.createElement('div');
+                            sudoPlaceholder.textContent = "sudo: you are not the superuser here.";
+                            tuiMainOutputElement.appendChild(sudoPlaceholder);
+                            updateTuiStatusBar("sudo");
+                            tuiMainOutputElement.scrollTop = 0;
+                        } else if (command === 'cowsay') {
+                            if (!tuiMainOutputElement) tuiMainOutputElement = document.getElementById('tui-main-output');
+                            tuiMainOutputElement.innerHTML = '';
+                            const cowsayPlaceholder = document.createElement('div');
+                            cowsayPlaceholder.textContent = "TUI cowsay: Use CLI for cowsay with arguments for now.";
+                            tuiMainOutputElement.appendChild(cowsayPlaceholder);
+                            updateTuiStatusBar("cowsay");
+                            tuiMainOutputElement.scrollTop = 0;
+                        } else if (command === 'sudo') {
+                            if (!tuiMainOutputElement) tuiMainOutputElement = document.getElementById('tui-main-output');
+                            tuiMainOutputElement.innerHTML = '';
+                            const sudoPlaceholder = document.createElement('div');
+                            sudoPlaceholder.textContent = "sudo: you are not the superuser here.";
+                            tuiMainOutputElement.appendChild(sudoPlaceholder);
+                            updateTuiStatusBar("sudo");
+                            tuiMainOutputElement.scrollTop = 0;
+                        } else if (command === 'cowsay') {
+                            if (!tuiMainOutputElement) tuiMainOutputElement = document.getElementById('tui-main-output');
+                            tuiMainOutputElement.innerHTML = '';
+                            const cowsayPlaceholder = document.createElement('div');
+                            cowsayPlaceholder.textContent = "TUI cowsay: Use CLI for cowsay with arguments for now.";
+                            tuiMainOutputElement.appendChild(cowsayPlaceholder);
+                            updateTuiStatusBar("cowsay");
+                            tuiMainOutputElement.scrollTop = 0;
+                        } else if (command === 'sudo') {
+                            if (!tuiMainOutputElement) tuiMainOutputElement = document.getElementById('tui-main-output');
+                            tuiMainOutputElement.innerHTML = '';
+                            const sudoPlaceholder = document.createElement('div');
+                            sudoPlaceholder.textContent = "sudo: you are not the superuser here.";
+                            tuiMainOutputElement.appendChild(sudoPlaceholder);
+                            updateTuiStatusBar("sudo");
+                            tuiMainOutputElement.scrollTop = 0;
+                        } else if (command === 'vi') {
+                            if (!tuiMainOutputElement) tuiMainOutputElement = document.getElementById('tui-main-output');
+                            tuiMainOutputElement.innerHTML = ''; // Clear previous output
+                            updateTuiStatusBar("Select a post for 'vi' (read-only view):");
+
+                            if (!postsManifest || postsManifest.length === 0) {
+                                const noPostsMsg = document.createElement('div');
+                                noPostsMsg.textContent = "No posts available for 'vi'.";
+                                tuiMainOutputElement.appendChild(noPostsMsg);
+                                return;
+                            }
+
+                            postsManifest.forEach(post => {
+                                const postDiv = document.createElement('div');
+                                postDiv.className = 'tui-selectable-item tui-post-to-vi'; 
+                                postDiv.textContent = post.name;
+                                postDiv.dataset.filename = post.name; 
+
+                                postDiv.addEventListener('click', async () => {
+                                    if (!tuiMainOutputElement) tuiMainOutputElement = document.getElementById('tui-main-output');
+                                    tuiMainOutputElement.innerHTML = '<div>Loading post for vi...</div>'; 
+                                    updateTuiStatusBar(`vi (read-only): ${post.name} (q to exit view - not yet implemented)`);
+                                    
+                                    try {
+                                        const response = await fetch(`public/posts/${post.name}`);
+                                        if (!response.ok) throw new Error(`File not found or unreadable (status ${response.status})`);
+                                        const rawMarkdownContent = await response.text();
+                                        
+                                        tuiMainOutputElement.innerHTML = ''; // Clear loading message
+
+                                        const lines = rawMarkdownContent.split('\n');
+                                        let viFormattedContent = "";
+                                        lines.forEach((line, index) => {
+                                            viFormattedContent += `<span class="line-number">${String(index + 1).padStart(3,' ')}</span>${escapeHtml(line)}\n`;
+                                        });
+
+                                        const preElement = document.createElement('pre');
+                                        // The inner div with white-space: pre is important for some browsers to respect \n correctly within pre
+                                        preElement.innerHTML = `<div style="white-space: pre;">${viFormattedContent}</div>`;
+                                        tuiMainOutputElement.appendChild(preElement);
+
+                                    } catch (error) {
+                                        const errorMsg = document.createElement('div');
+                                        errorMsg.className = 'error'; 
+                                        errorMsg.textContent = `vi: ${post.name}: ${error.message}`;
+                                        tuiMainOutputElement.appendChild(errorMsg);
+                                        updateTuiStatusBar(`Error displaying ${post.name} with vi`);
+                                    }
+                                    tuiMainOutputElement.scrollTop = 0;
+                                });
+                                tuiMainOutputElement.appendChild(postDiv);
+                            });
+                            tuiMainOutputElement.scrollTop = 0;
+                        } else if (command === 'vi') {
+                            if (!tuiMainOutputElement) tuiMainOutputElement = document.getElementById('tui-main-output');
+                            tuiMainOutputElement.innerHTML = ''; // Clear previous output
+                            updateTuiStatusBar("Select a post for 'vi' (read-only view):");
+
+                            if (!postsManifest || postsManifest.length === 0) {
+                                const noPostsMsg = document.createElement('div');
+                                noPostsMsg.textContent = "No posts available for 'vi'.";
+                                tuiMainOutputElement.appendChild(noPostsMsg);
+                                return;
+                            }
+
+                            postsManifest.forEach(post => {
+                                const postDiv = document.createElement('div');
+                                postDiv.className = 'tui-selectable-item tui-post-to-vi'; 
+                                postDiv.textContent = post.name;
+                                postDiv.dataset.filename = post.name; 
+
+                                postDiv.addEventListener('click', async () => {
+                                    if (!tuiMainOutputElement) tuiMainOutputElement = document.getElementById('tui-main-output');
+                                    tuiMainOutputElement.innerHTML = '<div>Loading post for vi...</div>'; 
+                                    updateTuiStatusBar(`vi (read-only): ${post.name} (q to exit view - not yet implemented)`);
+                                    
+                                    try {
+                                        const response = await fetch(`public/posts/${post.name}`);
+                                        if (!response.ok) throw new Error(`File not found or unreadable (status ${response.status})`);
+                                        const rawMarkdownContent = await response.text();
+                                        
+                                        tuiMainOutputElement.innerHTML = ''; // Clear loading message
+
+                                        const lines = rawMarkdownContent.split('\n');
+                                        let viFormattedContent = "";
+                                        lines.forEach((line, index) => {
+                                            viFormattedContent += `<span class="line-number">${String(index + 1).padStart(3,' ')}</span>${escapeHtml(line)}\n`;
+                                        });
+
+                                        const preElement = document.createElement('pre');
+                                        // The inner div with white-space: pre is important for some browsers to respect \n correctly within pre
+                                        preElement.innerHTML = `<div style="white-space: pre;">${viFormattedContent}</div>`;
+                                        tuiMainOutputElement.appendChild(preElement);
+
+                                    } catch (error) {
+                                        const errorMsg = document.createElement('div');
+                                        errorMsg.className = 'error'; 
+                                        errorMsg.textContent = `vi: ${post.name}: ${error.message}`;
+                                        tuiMainOutputElement.appendChild(errorMsg);
+                                        updateTuiStatusBar(`Error displaying ${post.name} with vi`);
+                                    }
+                                    tuiMainOutputElement.scrollTop = 0;
+                                });
+                                tuiMainOutputElement.appendChild(postDiv);
+                            });
+                            tuiMainOutputElement.scrollTop = 0;
+                        } else if (command === 'vi') {
+                            if (!tuiMainOutputElement) tuiMainOutputElement = document.getElementById('tui-main-output');
+                            tuiMainOutputElement.innerHTML = ''; // Clear previous output
+                            updateTuiStatusBar("Select a post for 'vi' (read-only view):");
+
+                            if (!postsManifest || postsManifest.length === 0) {
+                                const noPostsMsg = document.createElement('div');
+                                noPostsMsg.textContent = "No posts available for 'vi'.";
+                                tuiMainOutputElement.appendChild(noPostsMsg);
+                                return;
+                            }
+
+                            postsManifest.forEach(post => {
+                                const postDiv = document.createElement('div');
+                                postDiv.className = 'tui-selectable-item tui-post-to-vi'; 
+                                postDiv.textContent = post.name;
+                                postDiv.dataset.filename = post.name; 
+
+                                postDiv.addEventListener('click', async () => {
+                                    if (!tuiMainOutputElement) tuiMainOutputElement = document.getElementById('tui-main-output');
+                                    tuiMainOutputElement.innerHTML = '<div>Loading post for vi...</div>'; 
+                                    updateTuiStatusBar(`vi (read-only): ${post.name}`); // Simplified status for now
+                                    
+                                    try {
+                                        const response = await fetch(`public/posts/${post.name}`);
+                                        if (!response.ok) throw new Error(`File not found or unreadable (status ${response.status})`);
+                                        const rawMarkdownContent = await response.text();
+                                        
+                                        tuiMainOutputElement.innerHTML = ''; // Clear loading message
+
+                                        const lines = rawMarkdownContent.split('\n');
+                                        let viFormattedContent = "";
+                                        lines.forEach((line, index) => {
+                                            // Pad line number to 3 digits for alignment
+                                            viFormattedContent += `<span class="line-number">${String(index + 1).padStart(3, ' ')}</span>${escapeHtml(line)}\n`;
+                                        });
+
+                                        const preElement = document.createElement('pre');
+                                        // The inner div with white-space: pre is important for some browsers to respect \n correctly within pre
+                                        preElement.innerHTML = `<div style="white-space: pre;">${viFormattedContent}</div>`;
+                                        tuiMainOutputElement.appendChild(preElement);
+
+                                    } catch (error) {
+                                        const errorMsg = document.createElement('div');
+                                        errorMsg.className = 'error'; 
+                                        errorMsg.textContent = `vi: ${post.name}: ${error.message}`;
+                                        tuiMainOutputElement.appendChild(errorMsg);
+                                        updateTuiStatusBar(`Error displaying ${post.name} with vi`);
+                                    }
+                                    tuiMainOutputElement.scrollTop = 0;
+                                });
+                                tuiMainOutputElement.appendChild(postDiv);
+                            });
+                            tuiMainOutputElement.scrollTop = 0;
+                        } else if (command === 'history') {
+                            if (!tuiMainOutputElement) tuiMainOutputElement = document.getElementById('tui-main-output');
+                            tuiMainOutputElement.innerHTML = ''; // Clear previous output
+                            updateTuiStatusBar("Command History");
+
+                            if (commandHistory.length === 0) {
+                                const noHistoryMsg = document.createElement('div');
+                                noHistoryMsg.textContent = "No commands in history.";
+                                tuiMainOutputElement.appendChild(noHistoryMsg);
+                            } else {
+                                const reversedHistory = [...commandHistory].reverse();
+                                reversedHistory.forEach((cmd, index) => {
+                                    const historyItem = document.createElement('div');
+                                    historyItem.className = 'tui-history-item'; // For styling
+                                    historyItem.textContent = `  ${String(index + 1).padStart(3)}  ${cmd}`;
+                                    tuiMainOutputElement.appendChild(historyItem);
+                                });
+                            }
+                            tuiMainOutputElement.scrollTop = 0;
+                        } else if (command === 'whoami') {
+                            if (!tuiMainOutputElement) tuiMainOutputElement = document.getElementById('tui-main-output');
+                            tuiMainOutputElement.innerHTML = ''; 
+                            const outputDiv = document.createElement('div');
+                            outputDiv.textContent = 'guest';
+                            tuiMainOutputElement.appendChild(outputDiv);
+                            updateTuiStatusBar("whoami");
+                            tuiMainOutputElement.scrollTop = 0;
+                        } else if (command === 'date') {
+                            if (!tuiMainOutputElement) tuiMainOutputElement = document.getElementById('tui-main-output');
+                            tuiMainOutputElement.innerHTML = '';
+                            const outputDiv = document.createElement('div');
+                            outputDiv.textContent = new Date().toString();
+                            tuiMainOutputElement.appendChild(outputDiv);
+                            updateTuiStatusBar("date");
+                            tuiMainOutputElement.scrollTop = 0;
+                        } else if (command === 'fortune') {
+                            if (!tuiMainOutputElement) tuiMainOutputElement = document.getElementById('tui-main-output');
+                            tuiMainOutputElement.innerHTML = '';
+                            const outputDiv = document.createElement('div');
+                            outputDiv.textContent = fortunes[Math.floor(Math.random() * fortunes.length)];
+                            tuiMainOutputElement.appendChild(outputDiv);
+                            updateTuiStatusBar("fortune");
+                            tuiMainOutputElement.scrollTop = 0;
+                        } else if (command === 'clear') {
+                            if (!tuiMainOutputElement) tuiMainOutputElement = document.getElementById('tui-main-output');
+                            tuiMainOutputElement.innerHTML = ''; 
+                            updateTuiStatusBar("Screen cleared");
+                            tuiMainOutputElement.scrollTop = 0; 
+                        } else if (command === 'exit') {
+                            // Call the existing toggletui command, which handles switching back to CLI
+                            commands.toggletui(); 
+                            // Status bar update is handled by toggletui when switching to CLI
+                        } else if (command === 'echo') {
+                            if (!tuiMainOutputElement) tuiMainOutputElement = document.getElementById('tui-main-output');
+                            tuiMainOutputElement.innerHTML = ''; 
+                            const echoPlaceholder = document.createElement('div');
+                            echoPlaceholder.textContent = "TUI echo: Please use CLI for echo with arguments for now.";
+                            tuiMainOutputElement.appendChild(echoPlaceholder);
+                            updateTuiStatusBar("echo");
+                            tuiMainOutputElement.scrollTop = 0;
+                        } else {
+                            tuiMainOutputElement.textContent += `\n> ${command}\n`;
+                            // Simulate command execution for now
+                            tuiMainOutputElement.textContent += `Executed: ${command}. (Output would appear here)\n`;
+                            tuiMainOutputElement.scrollTop = tuiMainOutputElement.scrollHeight; // Scroll to bottom
+                            updateTuiStatusBar(`Executed: ${command}`);
+                        }
+                    } else {
+                        // Fallback if tuiMainOutputElement is somehow still null
+                        updateTuiStatusBar(`Error: TUI Main Output not found for ${command}`);
                     }
-                    updateTuiStatusBar(`Executed: ${command}`);
                 }
             });
 
