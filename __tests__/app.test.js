@@ -3,10 +3,8 @@
 const fs = require('fs');
 const path = require('path');
 
-// Mocking app.js's internal state and functions that are not easily tested directly
-let mockPostsManifest = [];
-let mockUserRepoNamesCache = null;
-let mockRepoContentsCache = {};
+// Mock fetch globally
+global.fetch = jest.fn();
 
 // Mock marked and hljs globally since they are CDN scripts in the real app
 global.marked = { parse: jest.fn(text => `parsed:${text}`) };

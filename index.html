@@ -16,33 +16,42 @@
     <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/lua.min.js"></script>
 </head>
 <body>
-    <div id="terminal">
-        <div id="output-container">
+    <div id="window-container">
+        <div id="window-title-bar">
+            <div class="window-controls">
+                <div class="control close"></div>
+                <div class="control minimize"></div>
+                <div class="control maximize"></div>
+            </div>
+            <div class="window-title">Terminal Blog</div>
+        </div>
+        <div id="terminal">
+            <div id="output-container"></div>
+        </div>
+
+        <div id="tui-mode-container" style="display: none;">
+            <div id="tui-sidebar">
+                <!-- Command list or file navigation will go here -->
+            </div>
+            <div id="tui-main-area"> <!-- Wrapper for main output and input -->
+                <div id="tui-main-output">
+                    <!-- Command output will go here -->
+                </div>
+                <div id="tui-input-area">
+                    <!-- Input elements or key capture instructions -->
+                </div>
+            </div>
+            <div id="tui-status-bar">
+                <!-- Status messages will go here -->
             </div>
         </div>
+    </div>
 
     <div id="modal-view" class="modal-view" style="display: none;">
         <div class="modal-content-wrapper">
             <div id="modal-nano-header" class="nano-mode modal-header" style="display: none;"></div>
             <div id="modal-content" class="modal-content"></div>
             <div id="modal-footer" class="modal-footer"></div>
-        </div>
-    </div>
-
-    <div id="tui-mode-container" style="display: none;">
-        <div id="tui-sidebar">
-            <!-- Command list or file navigation will go here -->
-        </div>
-        <div id="tui-main-area"> <!-- Wrapper for main output and input -->
-            <div id="tui-main-output">
-                <!-- Command output will go here -->
-            </div>
-            <div id="tui-input-area">
-                <!-- Input elements or key capture instructions -->
-            </div>
-        </div>
-        <div id="tui-status-bar">
-            <!-- Status messages will go here -->
         </div>
     </div>
 
