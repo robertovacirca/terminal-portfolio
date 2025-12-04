@@ -2,9 +2,19 @@ document.addEventListener('DOMContentLoaded', () => {
     const terminal = document.getElementById('terminal');
     const outputContainer = document.getElementById('output-container');
 
+    // --- FIX START ---
     const modalView = document.getElementById('modal-view');
+    
+    // Safety check: if modal-view is missing, stop or log error to prevent crash
+    if (!modalView) {
+        console.error("Error: #modal-view element not found in index.html. Ensure your HTML file is updated.");
+        return; 
+    }
+
     const modalContentWrapper = modalView.querySelector('.modal-content-wrapper');
     const modalNanoHeader = modalView.querySelector('#modal-nano-header');
+    // --- FIX END ---
+
     const modalContent = document.getElementById('modal-content');
     const modalFooter = document.getElementById('modal-footer');
 
