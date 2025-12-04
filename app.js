@@ -1412,7 +1412,7 @@ document.addEventListener('DOMContentLoaded', () => {
         tuiSidebarElement.innerHTML = '';
         tuiSidebarItems = [];
 
-        Object.keys(commandHelp).sort().forEach((command) => {
+        categories.forEach((cat) => {
             const item = document.createElement('div');
             item.className = 'tui-sidebar-item';
             item.textContent = command;
