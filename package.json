@@ -1,9 +1,9 @@
 {
-  "name": "react-linux-desktop",
-  "private": true,
+  "name": "terminal-portfolio",
+  "private": false,
   "version": "1.0.0",
   "type": "module",
-  "homepage": "https://YOUR_USERNAME.github.io/react-linux-desktop",
+  "homepage": "https://robertovacirca.github.io/terminal-portfolio",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
