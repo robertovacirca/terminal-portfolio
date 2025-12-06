@@ -1,53 +1,17 @@
 import React, { useState, useEffect, useRef } from 'react';
 
 /* =========================================
-   1. CONSTANTS & DATA
+   1. CONFIG & DATA
    ========================================= */
+// Defines the base URL for fetching assets (must match vite.config.js base)
+// Change this if you deploy to a different repository name
+const BASE_URL = '/terminal-portfolio/';
+
 const THEMES = {
-  default: {
-    id: 'default',
-    name: 'Arch Dark',
-    bg: '#2d2d2d',
-    windowBg: '#1e1e1e',
-    header: '#d6d6d6',
-    headerText: '#000000',
-    termBg: '#101010',
-    termText: '#cccccc',
-    accent: '#3584e4'
-  },
-  matrix: {
-    id: 'matrix',
-    name: 'The Matrix',
-    bg: '#000000',
-    windowBg: '#0d0d0d',
-    header: '#003300',
-    headerText: '#00ff00',
-    termBg: '#000000',
-    termText: '#00ff00',
-    accent: '#00ff00'
-  },
-  ubuntu: {
-    id: 'ubuntu',
-    name: 'Ubuntu Yaru',
-    bg: '#E95420',
-    windowBg: '#300a24',
-    header: '#300a24',
-    headerText: '#ffffff',
-    termBg: '#300a24',
-    termText: '#ffffff',
-    accent: '#E95420'
-  },
-  light: {
-    id: 'light',
-    name: 'Polar Light',
-    bg: '#e5e9f0',
-    windowBg: '#ffffff',
-    header: '#d8dee9',
-    headerText: '#2e3440',
-    termBg: '#ffffff',
-    termText: '#2e3440',
-    accent: '#5e81ac'
-  }
+  default: { id: 'default', name: 'Arch Dark', bg: '#2d2d2d', windowBg: '#1e1e1e', header: '#d6d6d6', headerText: '#000000', termBg: '#101010', termText: '#cccccc', accent: '#3584e4' },
+  matrix: { id: 'matrix', name: 'The Matrix', bg: '#000000', windowBg: '#0d0d0d', header: '#003300', headerText: '#00ff00', termBg: '#000000', termText: '#00ff00', accent: '#00ff00' },
+  ubuntu: { id: 'ubuntu', name: 'Ubuntu Yaru', bg: '#E95420', windowBg: '#300a24', header: '#300a24', headerText: '#ffffff', termBg: '#300a24', termText: '#ffffff', accent: '#E95420' },
+  light: { id: 'light', name: 'Polar Light', bg: '#e5e9f0', windowBg: '#ffffff', header: '#d8dee9', headerText: '#2e3440', termBg: '#ffffff', termText: '#2e3440', accent: '#5e81ac' }
 };
 
 const FORTUNES = [
@@ -77,30 +41,7 @@ const INITIAL_FS = {
             'posts': {
               type: 'dir',
               children: {
-                'welcome.txt': { 
-                    type: 'file', 
-                    metadata: { date: '2023-12-01', topic: 'General' },
-                    content: "# Welcome to my blog\n\nEverything here is live state.\n\n## Features\n- Real file system\n- **Markdown** support\n- Theme engine\n\nTry editing this file with `nano`!" 
-                },
-                'ideas.md': { 
-                    type: 'file', 
-                    metadata: { date: '2023-11-15', topic: 'Dev' },
-                    content: "# Project Ideas\n\n- [ ] Build a React OS\n- [ ] Learn Rust\n- [ ] Touch grass" 
-                },
-                'rust_journey.md': {
-                    type: 'file', 
-                    metadata: { date: '2023-11-20', topic: 'Dev' },
-                    content: "# Learning Rust\n\nBorrow checker is tough but fair."
-                },
-                'gardening.txt': {
-                    type: 'file', 
-                    metadata: { date: '2023-10-05', topic: 'Life' },
-                    content: "Tomatoes are growing well."
-                },
-                'topics.json': {
-                    type: 'file',
-                    content: '{"Dev": "#3584e4", "Life": "#26a269", "General": "#e5a50a"}'
-                }
+                  '.loading': { type: 'file', content: 'Loading posts...' }
               }
             },
             'repo': {
@@ -233,7 +174,6 @@ const getAllPosts = (fs) => {
    3. WINDOW COMPONENTS
    ========================================= */
 
-// --- CALENDAR WIDGET ---
 const CalendarWidget = ({ fs, openPost, onClose }) => {
     const [currentDate, setCurrentDate] = useState(new Date()); 
     const [selectedDateStr, setSelectedDateStr] = useState(null);
@@ -241,10 +181,8 @@ const CalendarWidget = ({ fs, openPost, onClose }) => {
 
     const year = currentDate.getFullYear();
     const month = currentDate.getMonth();
-    
     const firstDayOfMonth = new Date(year, month, 1).getDay();
     const daysInMonth = new Date(year, month + 1, 0).getDate();
-    
     const slots = [];
     for (let i = 0; i < firstDayOfMonth; i++) slots.push(null);
     for (let i = 1; i <= daysInMonth; i++) slots.push(new Date(year, month, i));
@@ -296,7 +234,6 @@ const CalendarWidget = ({ fs, openPost, onClose }) => {
     );
 };
 
-// --- ACTIVITIES OVERVIEW ---
 const ActivitiesOverview = ({ windows, onSelectWindow, onClose }) => {
     return (
         <div className="fixed inset-0 z-[99999] bg-black/60 backdrop-blur-sm flex flex-col items-center justify-center p-10 animate-fade-in" onClick={onClose}>
@@ -314,7 +251,6 @@ const ActivitiesOverview = ({ windows, onSelectWindow, onClose }) => {
     );
 };
 
-// --- FILE MANAGER ---
 const FileManager = ({ fs, initialPath, openTerminalWithFile, onClose, theme }) => {
     const [path, setPath] = useState(initialPath);
     const [viewMode, setViewMode] = useState('DATE'); 
@@ -389,7 +325,6 @@ const FileManager = ({ fs, initialPath, openTerminalWithFile, onClose, theme }) 
     );
 };
 
-// --- MARKDOWN RENDERER ---
 const MarkdownRenderer = ({ content, theme }) => {
   if (!content) return null;
   const h1Style = { color: theme.accent, borderBottomColor: '#555' };
@@ -416,7 +351,6 @@ const MarkdownRenderer = ({ content, theme }) => {
   );
 };
 
-// --- TERMINAL ---
 const Terminal = ({ fs, setFs, initialPath = ['home', 'user'], initialCommand, openNano, theme, setThemeId, username, setUsername, fetchFileContent }) => {
   const [history, setHistory] = useState(initialCommand ? [] : ['Welcome to React Linux v3.0', 'Type "help" for commands.']);
   const [cmdHistory, setCmdHistory] = useState([]);
@@ -567,7 +501,7 @@ const Terminal = ({ fs, setFs, initialPath = ['home', 'user'], initialCommand, o
         }
         break;
       case 'nano':
-        // Simplified for brevity, same logic as before
+        // Simplified for brevity
         break;
       case 'rm':
         if (!arg) addToHistory({ type: 'text', text: 'Usage: rm <name>' });
@@ -607,7 +541,6 @@ const Terminal = ({ fs, setFs, initialPath = ['home', 'user'], initialCommand, o
   );
 };
 
-// --- SETTINGS ---
 const Settings = ({ currentThemeId, setThemeId, theme }) => (
   <div className="p-4 flex flex-col gap-6 text-sm font-sans h-full overflow-y-auto" style={{ color: theme.termText }}>
     <section>
@@ -629,7 +562,6 @@ const Settings = ({ currentThemeId, setThemeId, theme }) => (
   </div>
 );
 
-// --- NANO EDITOR ---
 const Nano = ({ fileContent, fileName, onSave, onClose, theme }) => {
   const [text, setText] = useState(fileContent || "");
   const [message, setMessage] = useState(`File: ${fileName}`);
@@ -648,7 +580,6 @@ const Nano = ({ fileContent, fileName, onSave, onClose, theme }) => {
   );
 };
 
-// --- WINDOW MANAGER ---
 const Window = ({ id, title, children, x, y, w, h, onClose, onFocus, zIndex, theme }) => {
   const [isMaximized, setIsMaximized] = useState(false);
   const [size, setSize] = useState({ w, h });
@@ -734,15 +665,58 @@ export default function App() {
       }
   };
 
+  // FETCH POSTS
+  useEffect(() => {
+      const fetchPosts = async () => {
+          try {
+              // 1. Fetch Manifest
+              const res = await fetch(BASE_URL + 'posts/metadata.json');
+              const data = await res.json();
+              
+              if (Array.isArray(data)) {
+                  setFs(prev => {
+                      const newFs = deepClone(prev);
+                      const postsNode = newFs.children.home.children.user.children.posts;
+                      postsNode.children = {}; // Clear loading state
+                      
+                      data.forEach(post => {
+                          postsNode.children[post.filename] = {
+                              type: 'file',
+                              metadata: { date: post.date, topic: post.topic },
+                              content: null, // Lazy
+                              download_url: BASE_URL + 'posts/' + post.filename
+                          };
+                      });
+                      return newFs;
+                  });
+              }
+          } catch (error) {
+              console.error("Failed to fetch posts:", error);
+              // Set error state in FS
+              setFs(prev => {
+                  const newFs = deepClone(prev);
+                  newFs.children.home.children.user.children.posts.children = {
+                      'error.txt': { type: 'file', content: 'Failed to load posts metadata.' }
+                  };
+                  return newFs;
+              });
+          }
+      };
+      fetchPosts();
+  }, []);
+
   // FETCH REPOS (Recursive Tree)
   useEffect(() => {
       const fetchRepos = async () => {
           try {
+              // 1. Get List of Repos
               const res = await fetch('https://api.github.com/users/robertovacirca/repos');
               const repos = await res.json();
               
               if (Array.isArray(repos)) {
                   const newRepoChildren = {};
+                  
+                  // 2. Process each repo
                   await Promise.all(repos.map(async (repo) => {
                       newRepoChildren[repo.name] = {
                           type: 'dir',
@@ -752,20 +726,25 @@ export default function App() {
                           },
                           children: {}
                       };
+
                       try {
+                          // 3. Fetch Recursive Tree
                           const branch = repo.default_branch || 'main';
                           const treeRes = await fetch(`https://api.github.com/repos/${repo.owner.login}/${repo.name}/git/trees/${branch}?recursive=1`);
                           const treeData = await treeRes.json();
+
                           if (treeData.tree) {
                               treeData.tree.forEach(item => {
+                                  // Build nested structure from path string
                                   const parts = item.path.split('/');
                                   let currentLevel = newRepoChildren[repo.name].children;
+                                  
                                   parts.forEach((part, idx) => {
                                       if (idx === parts.length - 1) {
                                           if (item.type === 'blob') {
                                               currentLevel[part] = {
                                                   type: 'file',
-                                                  content: null, 
+                                                  content: null, // Lazy Load
                                                   download_url: `https://raw.githubusercontent.com/${repo.owner.login}/${repo.name}/${branch}/${item.path}`
                                               };
                                           } else if (item.type === 'tree') {
@@ -782,6 +761,8 @@ export default function App() {
                           newRepoChildren[repo.name].children['ERROR.txt'] = { type: 'file', content: 'Could not fetch repo contents.' };
                       }
                   }));
+
+                  // Update FS
                   setFs(prev => {
                       const newFs = deepClone(prev);
                       newFs.children.home.children.user.children.repo.children = newRepoChildren;
@@ -792,6 +773,7 @@ export default function App() {
               console.error("Failed to fetch repos:", error);
           }
       };
+      
       fetchRepos();
   }, []);
 
